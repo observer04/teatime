@@ -1,0 +1,93 @@
+# ==============================================================================
+# TeaTime - Local Development Stack
+# ==============================================================================
+# Usage: docker compose up -d
+# ==============================================================================
+
+services:
+  # ============================================================================
+  # PostgreSQL Database
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: teatime-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: teatime
+      POSTGRES_PASSWORD: teatime
+      POSTGRES_DB: teatime
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teatime -d teatime"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Go Backend (development mode with hot reload)
+  # ============================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: teatime-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_ENV=development
+      - SERVER_ADDR=0.0.0.0:8080
+      - DATABASE_URL=postgres://teatime:teatime@postgres:5432/teatime?sslmode=disable
+      - APP_BASE_URL=http://localhost:5173
+      - API_BASE_URL=http://localhost:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ============================================================================
+  # Backend with hot-reload for development (use instead of 'backend' for dev)
+  # ============================================================================
+  backend-dev:
+    image: cosmtrek/air:v1.52.3
+    container_name: teatime-backend-dev
+    working_dir: /app
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_ENV=development
+      - SERVER_ADDR=0.0.0.0:8080
+      - DATABASE_URL=postgres://teatime:teatime@postgres:5432/teatime?sslmode=disable
+      - APP_BASE_URL=http://localhost:5173
+      - API_BASE_URL=http://localhost:8080
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - dev
+
+  # ============================================================================
+  # React Frontend (Vite dev server with hot reload)
+  # ============================================================================
+  frontend:
+    image: node:20-alpine
+    container_name: teatime-frontend
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=http://localhost:8080
+      - VITE_WS_BASE=ws://localhost:8080/ws
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
