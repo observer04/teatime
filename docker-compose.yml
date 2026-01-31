@@ -43,6 +43,16 @@ services:
       - DATABASE_URL=postgres://teatime:teatime@postgres:5432/teatime?sslmode=disable
       - APP_BASE_URL=http://localhost:5173
       - API_BASE_URL=http://localhost:8080
+      # WebRTC/TURN configuration
+      - ICE_STUN_URLS=stun:stun.l.google.com:19302,stun:coturn:3478
+      - ICE_TURN_URLS=turn:coturn:3478
+      - TURN_USERNAME=teatime
+      - TURN_PASSWORD=teatime-turn-secret
+      # R2 Configuration (file uploads)
+      - R2_ACCOUNT_ID=4fadcd0f4391ae7b4de38198a605016f
+      - R2_ACCESS_KEY_ID=5fa8fea278b69d6d0e75ed841c128f6c
+      - R2_SECRET_ACCESS_KEY=97025b4c1f0b3cbc3d7fdeec7dae8c9d41e846fbfeef958ea419462bb585582b
+      - R2_BUCKET=teatime
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,6 +72,11 @@ services:
       - DATABASE_URL=postgres://teatime:teatime@postgres:5432/teatime?sslmode=disable
       - APP_BASE_URL=http://localhost:5173
       - API_BASE_URL=http://localhost:8080
+      # WebRTC/TURN configuration
+      - ICE_STUN_URLS=stun:stun.l.google.com:19302,stun:coturn:3478
+      - ICE_TURN_URLS=turn:coturn:3478
+      - TURN_USERNAME=teatime
+      - TURN_PASSWORD=teatime-turn-secret
     volumes:
       - ./backend:/app
     depends_on:
@@ -88,6 +103,27 @@ services:
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     depends_on:
       - backend
+
+  # ============================================================================
+  # Coturn TURN/STUN Server (for WebRTC NAT traversal)
+  # ============================================================================
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    container_name: teatime-coturn
+    restart: unless-stopped
+    ports:
+      - "3478:3478/tcp"      # STUN/TURN TCP
+      - "3478:3478/udp"      # STUN/TURN UDP
+      - "5349:5349/tcp"      # STUN/TURN TLS
+      - "5349:5349/udp"      # STUN/TURN DTLS
+      - "49152-49200:49152-49200/udp"  # WebRTC media relay range
+    volumes:
+      - ./infra/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    networks:
+      default:
+        aliases:
+          - coturn
 
 volumes:
   postgres_data:

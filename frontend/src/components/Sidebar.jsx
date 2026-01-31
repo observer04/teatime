@@ -7,13 +7,17 @@ export default function Sidebar({
   currentConversation,
   onSelectConversation,
   onCreateDM,
+  onCreateGroup,
   onLogout,
   isConnected
 }) {
   const [showNewChat, setShowNewChat] = useState(false);
+  const [chatMode, setChatMode] = useState('dm'); // 'dm' or 'group'
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [groupTitle, setGroupTitle] = useState('');
+  const [selectedMembers, setSelectedMembers] = useState([]);
 
   const handleSearch = async (query) => {
     setSearchQuery(query);
@@ -36,20 +40,69 @@ export default function Sidebar({
   const handleCreateDM = async (userId) => {
     try {
       await onCreateDM(userId);
-      setShowNewChat(false);
-      setSearchQuery('');
-      setSearchResults([]);
+      closeModal();
     } catch (error) {
       alert(error.message);
     }
   };
 
-  const getDMName = (conv) => {
+  const handleSelectMember = (member) => {
+    if (chatMode === 'dm') {
+      handleCreateDM(member.id);
+    } else {
+      // Toggle selection for group
+      if (selectedMembers.find(m => m.id === member.id)) {
+        setSelectedMembers(selectedMembers.filter(m => m.id !== member.id));
+      } else {
+        setSelectedMembers([...selectedMembers, member]);
+      }
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    if (!groupTitle.trim()) {
+      alert('Please enter a group name');
+      return;
+    }
+    if (selectedMembers.length === 0) {
+      alert('Please select at least one member');
+      return;
+    }
+    try {
+      await onCreateGroup(groupTitle, selectedMembers.map(m => m.id));
+      closeModal();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const closeModal = () => {
+    setShowNewChat(false);
+    setSearchQuery('');
+    setSearchResults([]);
+    setGroupTitle('');
+    setSelectedMembers([]);
+    setChatMode('dm');
+  };
+
+  const getConversationName = (conv) => {
+    if (conv.type === 'group') {
+      return conv.title || 'Group Chat';
+    }
+    // DM - get the other person's name
     if (!conv.members) return 'Unknown';
     const other = conv.members.find(m => m.user_id !== user.id);
     if (other?.user) return other.user.username;
     if (other?.username) return other.username;
     return 'Unknown';
+  };
+
+  const getConversationAvatar = (conv) => {
+    if (conv.type === 'group') {
+      return '👥';
+    }
+    const name = getConversationName(conv);
+    return name.charAt(0).toUpperCase();
   };
 
   return (
@@ -88,8 +141,10 @@ export default function Sidebar({
             </div>
           ) : (
             conversations.map(conv => {
-              const name = conv.type === 'dm' ? getDMName(conv) : conv.name || 'Group Chat';
+              const name = getConversationName(conv);
+              const avatar = getConversationAvatar(conv);
               const isActive = currentConversation?.id === conv.id;
+              const memberCount = conv.members?.length || 0;
 
               return (
                 <button
@@ -100,15 +155,15 @@ export default function Sidebar({
                   }`}
                 >
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold ${
-                    isActive ? 'bg-green-600' : 'bg-green-500'
+                    conv.type === 'group' ? 'bg-purple-500 text-lg' : (isActive ? 'bg-green-600' : 'bg-green-500')
                   }`}>
-                    {name.charAt(0).toUpperCase()}
+                    {avatar}
                   </div>
                   <div className="flex-1 text-left min-w-0">
                     <div className="font-semibold text-gray-900 truncate">{name}</div>
-                    {conv.last_message && (
-                      <div className="text-sm text-gray-500 truncate">{conv.last_message}</div>
-                    )}
+                    <div className="text-sm text-gray-500 truncate">
+                      {conv.type === 'group' ? `${memberCount} members` : conv.last_message || ''}
+                    </div>
                   </div>
                 </button>
               );
@@ -138,13 +193,13 @@ export default function Sidebar({
 
       {/* New Chat Modal */}
       {showNewChat && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowNewChat(false)}>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeModal}>
           <div className="bg-white rounded-2xl w-full max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="p-6 border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <h3 className="text-xl font-semibold text-gray-900">New Chat</h3>
                 <button
-                  onClick={() => setShowNewChat(false)}
+                  onClick={closeModal}
                   className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -152,11 +207,72 @@ export default function Sidebar({
                   </svg>
                 </button>
               </div>
+              
+              {/* Chat Mode Toggle */}
+              <div className="flex mt-4 bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => { setChatMode('dm'); setSelectedMembers([]); }}
+                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                    chatMode === 'dm' ? 'bg-white shadow text-gray-900' : 'text-gray-600'
+                  }`}
+                >
+                  Direct Message
+                </button>
+                <button
+                  onClick={() => setChatMode('group')}
+                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                    chatMode === 'group' ? 'bg-white shadow text-gray-900' : 'text-gray-600'
+                  }`}
+                >
+                  New Group
+                </button>
+              </div>
             </div>
 
             <div className="p-6">
+              {/* Group Title Input */}
+              {chatMode === 'group' && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Group Name
+                  </label>
+                  <input
+                    type="text"
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value)}
+                    placeholder="Enter group name..."
+                    className="input"
+                  />
+                </div>
+              )}
+
+              {/* Selected Members for Group */}
+              {chatMode === 'group' && selectedMembers.length > 0 && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Selected Members ({selectedMembers.length})
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMembers.map(member => (
+                      <span 
+                        key={member.id}
+                        className="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm"
+                      >
+                        {member.username}
+                        <button 
+                          onClick={() => setSelectedMembers(selectedMembers.filter(m => m.id !== member.id))}
+                          className="hover:text-green-600"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Search Users
+                {chatMode === 'group' ? 'Add Members' : 'Search Users'}
               </label>
               <input
                 type="text"
@@ -167,26 +283,47 @@ export default function Sidebar({
                 autoFocus
               />
 
-              <div className="mt-4 space-y-2">
+              <div className="mt-4 space-y-2 max-h-48 overflow-y-auto">
                 {searching ? (
                   <div className="text-center py-4 text-gray-500">Searching...</div>
                 ) : searchResults.length === 0 && searchQuery.length >= 2 ? (
                   <div className="text-center py-4 text-gray-500">No users found</div>
                 ) : (
-                  searchResults.map(user => (
-                    <button
-                      key={user.id}
-                      onClick={() => handleCreateDM(user.id)}
-                      className="w-full p-3 flex items-center gap-3 hover:bg-gray-50 rounded-lg transition-colors"
-                    >
-                      <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white font-semibold">
-                        {user.username.charAt(0).toUpperCase()}
-                      </div>
-                      <span className="font-medium text-gray-900">{user.username}</span>
-                    </button>
-                  ))
+                  searchResults.map(foundUser => {
+                    const isSelected = selectedMembers.find(m => m.id === foundUser.id);
+                    return (
+                      <button
+                        key={foundUser.id}
+                        onClick={() => handleSelectMember(foundUser)}
+                        className={`w-full p-3 flex items-center gap-3 rounded-lg transition-colors ${
+                          isSelected ? 'bg-green-50 border border-green-200' : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white font-semibold">
+                          {foundUser.username.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="font-medium text-gray-900 flex-1 text-left">{foundUser.username}</span>
+                        {chatMode === 'group' && isSelected && (
+                          <svg className="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </button>
+                    );
+                  })
                 )}
               </div>
+
+              {/* Create Group Button */}
+              {chatMode === 'group' && (
+                <button
+                  onClick={handleCreateGroup}
+                  disabled={!groupTitle.trim() || selectedMembers.length === 0}
+                  className="w-full mt-4 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Create Group ({selectedMembers.length} members)
+                </button>
+              )}
             </div>
           </div>
         </div>

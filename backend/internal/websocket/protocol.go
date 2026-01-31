@@ -73,6 +73,7 @@ type RoomLeavePayload struct {
 type MessageSendPayload struct {
 	ConversationID string `json:"conversation_id"`
 	BodyText       string `json:"body_text"`
+	AttachmentID   string `json:"attachment_id,omitempty"`
 	TempID         string `json:"temp_id,omitempty"` // Client-side temp ID for optimistic UI
 }
 
@@ -104,13 +105,23 @@ type AuthSuccessPayload struct {
 
 // MessageNewPayload broadcasts a new message to room members
 type MessageNewPayload struct {
-	ID             uuid.UUID `json:"id"`
-	ConversationID uuid.UUID `json:"conversation_id"`
-	SenderID       uuid.UUID `json:"sender_id"`
-	SenderUsername string    `json:"sender_username"`
-	BodyText       string    `json:"body_text"`
-	CreatedAt      time.Time `json:"created_at"`
-	TempID         string    `json:"temp_id,omitempty"` // Echo back for sender
+	ID             uuid.UUID  `json:"id"`
+	ConversationID uuid.UUID  `json:"conversation_id"`
+	SenderID       uuid.UUID  `json:"sender_id"`
+	SenderUsername string     `json:"sender_username"`
+	BodyText       string     `json:"body_text"`
+	AttachmentID   *uuid.UUID `json:"attachment_id,omitempty"`
+	Attachment     *AttachmentPayload `json:"attachment,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	TempID         string     `json:"temp_id,omitempty"` // Echo back for sender
+}
+
+// AttachmentPayload contains attachment details
+type AttachmentPayload struct {
+	ID        uuid.UUID `json:"id"`
+	Filename  string    `json:"filename"`
+	MimeType  string    `json:"mime_type"`
+	SizeBytes int64     `json:"size_bytes"`
 }
 
 // TypingBroadcastPayload broadcasts typing status

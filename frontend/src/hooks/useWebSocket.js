@@ -23,6 +23,8 @@ export function useWebSocket(token) {
         sender_id: payload.sender_id,
         body_text: payload.body_text,
         created_at: payload.created_at,
+        attachment_id: payload.attachment_id,
+        attachment: payload.attachment,
         sender: {
           id: payload.sender_id,
           username: payload.sender_username
@@ -45,11 +47,17 @@ export function useWebSocket(token) {
     };
   }, [token]);
 
-  const sendMessage = useCallback((conversationId, bodyText) => {
-    wsService.send('message.send', {
+  const sendMessage = useCallback((conversationId, bodyText, attachmentId = null) => {
+    const payload = {
       conversation_id: conversationId,
-      body_text: bodyText
-    });
+      body_text: bodyText || ''
+    };
+    
+    if (attachmentId) {
+      payload.attachment_id = attachmentId;
+    }
+    
+    wsService.send('message.send', payload);
   }, []);
 
   const joinRoom = useCallback((conversationId) => {

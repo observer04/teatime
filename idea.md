@@ -12,11 +12,11 @@
 *Goal: A reproducible development environment that mimics production.*
 
 ### Stage 0.1: Infrastructure & Tools
-- [ ] **Monorepo Setup:** Establish `backend/` (Go), `web/` (React/TS), and `infra/`.
-- [ ] **Dockerization:**
-    - Write a multi-stage `Dockerfile` for Go (build vs. run).
-    - Create `docker-compose.yml` for local dev (Postgres 16, Redis, App, UI).
-- [ ] **Make-driven Dev:** Create a `Makefile` for one-command startup (`make up`, `make migrate`, `make test`).
+- [x] **Monorepo Setup:** Establish `backend/` (Go), `web/` (React/TS), and `infra/`.
+- [x] **Dockerization:**
+  - Write a multi-stage `Dockerfile` for Go (build vs. run).
+  - Create `docker-compose.yml` for local dev (Postgres 16, ~~Redis~~, App, UI, **Coturn**).
+- [x] **Make-driven Dev:** Create a `Makefile` for one-command startup (`make up`, `make migrate`, `make test`).
 - [ ] **CI Pipeline:** Setup GitHub Actions to run linting (`golangci-lint`) and unit tests on every push.
 
 ---
@@ -25,18 +25,19 @@
 *Goal: Secure authentication demonstrating knowledge of crypto basics.*
 
 ### Stage 1.1: Database Schema (Postgres)
-- [ ] **Migration System:** Set up `golang-migrate`.
-- [ ] **Core Tables:** `users`, `credentials` (sep from users), `sessions`.
-- [ ] **Indexes:** Add unique constraints on email/username.
+- [x] **Migration System:** Set up ~~`golang-migrate`~~ custom EnsureSchema().
+- [x] **Core Tables:** `users`, `credentials` (sep from users), ~~`sessions`~~ `refresh_tokens`.
+- [x] **Indexes:** Add unique constraints on email/username.
 
 ### Stage 1.2: Authentication Service
-- [ ] **Email/Password Flow:**
-    - Implement `bcrypt` hashing.
-    - Validate password strength.
-- [ ] **JWT Implementation:**
-    - Issue Access Tokens (Short-lived) & Refresh Tokens (Long-lived, stored in HttpOnly cookies).
-    - Implement "Token Rotation" for security (detect token reuse).
+- [x] **Email/Password Flow:**
+  - Implement `bcrypt` hashing.
+  - Validate password strength.
+- [x] **JWT Implementation:**
+  - Issue Access Tokens (Short-lived) & Refresh Tokens (Long-lived, stored in HttpOnly cookies).
+  - Implement "Token Rotation" for security (detect token reuse).
 - [ ] **OAuth 2.0 (Optional/Later):** GitHub/Google login (adds ease of use).
+- [ ] **⚠️ CRITICAL BUG:** Frontend stores refresh tokens in localStorage (XSS risk). See EVALUATION.md.
 
 ---
 
@@ -44,21 +45,21 @@
 *Goal: Two users exchanging text messages instantly.*
 
 ### Stage 2.1: The WebSocket Hub (Go)
-- [ ] **Connection Handling:** Upgrade HTTP to WS using `nhooyr` or standard lib.
-- [ ] **The Hub Pattern:** Implement a central structure managing active client connections.
-- [ ] **Concurrency Safety:** Use Mutexes (`sync.RWMutex`) or Channels to safely add/remove users from the hub.
-- [ ] **Graceful Shutdown:** Ensure the server waits for active writes to finish before killing connections on restart.
+- [x] **Connection Handling:** Upgrade HTTP to WS using ~~`nhooyr`~~ `gorilla/websocket`.
+- [x] **The Hub Pattern:** Implement a central structure managing active client connections.
+- [x] **Concurrency Safety:** Use Mutexes (`sync.RWMutex`) or Channels to safely add/remove users from the hub.
+- [~] **Graceful Shutdown:** ~~Ensure the server waits for active writes to finish before killing connections on restart.~~ **Partial:** respects ctx.Done() but no drain period. See EVALUATION.md P1.
 
 ### Stage 2.2: Persistence & History
-- [ ] **Message Schema:** `messages` table with `conversation_id`.
-- [ ] **Optimized Queries:** Fetch history using **Cursor Pagination** (not Offset) to handle large chat logs efficiently.
-- [ ] **Fan-Out Logic:**
-    - Receive WS message -> Save to DB (Async) -> Broadcast to recipient.
+- [x] **Message Schema:** `messages` table with `conversation_id`.
+- [~] **Optimized Queries:** Fetch history using **Cursor Pagination** (not Offset) to handle large chat logs efficiently. **⚠️ Uses `created_at` instead of message ID. See EVALUATION.md.**
+- [x] **Fan-Out Logic:**
+  - Receive WS message -> Save to DB (Async) -> Broadcast to recipient.
 
 ### Stage 2.3: Basic Frontend (React)
-- [ ] **State Management:** Use a lightweight store (Zustand or Context) for the message list.
-- [ ] **Socket Logic:** robust "Reconnection" logic (exponential backoff) if internet drops.
-- [ ] **UI:** Simple, clean chat interface (Tailwind CSS).
+- [x] **State Management:** Use a lightweight store (~~Zustand or~~ Context + useState) for the message list.
+- [ ] **Socket Logic:** ~~robust "Reconnection" logic (exponential backoff) if internet drops.~~ **Missing reconnection.**
+- [x] **UI:** Simple, clean chat interface (Tailwind CSS).
 
 ---
 
@@ -66,20 +67,21 @@
 *Goal: Moving from a toy app to a scalable system.*
 
 ### Stage 3.1: Group Chats & Advanced Routing
-- [ ] **Database Model:** `conversations` (many-to-many with users).
-- [ ] **Pub/Sub Layer:**
-    - Refactor the In-Memory Hub to use an **Interface** (`Publisher`/`Subscriber`).
-    - *Why?* Allows swapping memory for Redis later.
-- [ ] **Broadcast Logic:** Efficiently route a message to 50+ group members without blocking the main thread.
+- [x] **Database Model:** `conversations` (many-to-many with users).
+- [x] **Pub/Sub Layer:** ✅ **EXCELLENT IMPLEMENTATION**
+  - Refactor the In-Memory Hub to use an **Interface** (`Publisher`/`Subscriber`).
+  - *Why?* Allows swapping memory for Redis later.
+  - **Status:** Interface + in-memory impl done (94% test coverage). Redis impl needed for production.
+- [x] **Broadcast Logic:** Efficiently route a message to 50+ group members without blocking the main thread.
 
 ### Stage 3.2: Media Handling (S3 Compatible)
-- [ ] **Presigned URLs:** Do not stream files through your Go server. Generate "Upload URLs" so the frontend uploads directly to Object Storage (R2/S3/MinIO).
-- [ ] **Go Worker Pool:** Implement a background worker to process image metadata or generate thumbnails *after* upload.
+- [ ] **Presigned URLs:** Do not stream files through your Go server. Generate "Upload URLs" so the frontend uploads directly to Object Storage (R2/S3/MinIO). **⚠️ NOT STARTED**
+- [ ] **Go Worker Pool:** Implement a background worker to process image metadata or generate thumbnails *after* upload. **⚠️ NOT STARTED**
 
 ### Stage 3.3: User Presence
-- [ ] **Online/Offline Status:**
-    - Use Redis (with TTL) to store "last heartbeat".
-    - Show "Typing..." indicators (ephemeral events, do not store in DB).
+- [ ] **Online/Offline Status:** **⚠️ NOT STARTED**
+  - Use Redis (with TTL) to store "last heartbeat".
+- [x] **Show "Typing..." indicators** (ephemeral events, do not store in DB). ✅ DONE
 
 ---
 
@@ -102,9 +104,9 @@
 ## Phase 5: The "Expert" Challenges (Optional/Future)
 *Goal: Specific features to target Senior/Specialist roles.*
 
-- [ ] **E2EE (Security):** Implement Signal Protocol (Double Ratchet) for client-side encryption.
-- [ ] **Voice/Video (Systems):** Integrate `Pion` (Go WebRTC) for P2P calling.
-- [ ] **Full Text Search (Data):** Integrate a lightweight search engine (Bleve or Postgres FTS) to search chat history.
+- [ ] **E2EE (Security):** Implement Signal Protocol (Double Ratchet) for client-side encryption. **⚠️ NOT STARTED**
+- [~] **Voice/Video (Systems):** Integrate `Pion` (Go WebRTC) for P2P calling. **🚧 IN PROGRESS:** Signaling + coturn done, media forwarding missing.
+- [ ] **Full Text Search (Data):** Integrate a lightweight search engine (Bleve or Postgres FTS) to search chat history. **⚠️ NOT STARTED**
 
 ---
 

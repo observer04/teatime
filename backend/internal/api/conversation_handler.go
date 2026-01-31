@@ -30,7 +30,19 @@ func NewConversationHandler(convs *database.ConversationRepository, users *datab
 	}
 }
 
-// CreateConversation handles POST /conversations
+// CreateConversation godoc
+//
+//	@Summary		Create conversation
+//	@Description	Create a new direct message or group conversation
+//	@Tags			conversations
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			request	body		object{type=string,title=string,member_ids=[]string}	true	"Conversation details"
+//	@Success		201	{object}	domain.Conversation
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations [post]
 func (h *ConversationHandler) CreateConversation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -142,7 +154,17 @@ func (h *ConversationHandler) CreateConversation(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusCreated, conv)
 }
 
-// ListConversations handles GET /conversations
+// ListConversations godoc
+//
+//	@Summary		List conversations
+//	@Description	Get all conversations for the authenticated user
+//	@Tags			conversations
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			archived	query		bool	false	"Include archived conversations"
+//	@Success		200	{object}	object{conversations=[]domain.Conversation,count=int}
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations [get]
 func (h *ConversationHandler) ListConversations(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -150,7 +172,26 @@ func (h *ConversationHandler) ListConversations(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	conversations, err := h.convs.GetUserConversations(r.Context(), userID)
+	// Check for archived parameter
+	if r.URL.Query().Get("archived") == "true" {
+		conversations, err := h.convs.GetArchivedConversations(r.Context(), userID)
+		if err != nil {
+			h.logger.Error("list archived conversations failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to list archived conversations")
+			return
+		}
+		if conversations == nil {
+			conversations = []domain.Conversation{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"conversations": conversations,
+			"count":         len(conversations),
+		})
+		return
+	}
+
+	// Get conversations with details (unread count, last message, etc.)
+	conversations, err := h.convs.GetUserConversationsWithDetails(r.Context(), userID)
 	if err != nil {
 		h.logger.Error("list conversations failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list conversations")
@@ -167,7 +208,18 @@ func (h *ConversationHandler) ListConversations(w http.ResponseWriter, r *http.R
 	})
 }
 
-// GetConversation handles GET /conversations/{id}
+// GetConversation godoc
+//
+//	@Summary		Get conversation details
+//	@Description	Get details of a specific conversation including members
+//	@Tags			conversations
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Success		200	{object}	domain.Conversation
+//	@Failure		401	{object}	map[string]string
+//	@Failure		404	{object}	map[string]string
+//	@Router			/conversations/{id} [get]
 func (h *ConversationHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -207,7 +259,20 @@ func (h *ConversationHandler) GetConversation(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, conv)
 }
 
-// AddMember handles POST /conversations/{id}/members
+// AddMember godoc
+//
+//	@Summary		Add member to conversation
+//	@Description	Add a new member to a group conversation
+//	@Tags			conversations
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			request	body		object{user_id=string}	true	"User to add"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/members [post]
 func (h *ConversationHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -263,7 +328,18 @@ func (h *ConversationHandler) AddMember(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "member added"})
 }
 
-// RemoveMember handles DELETE /conversations/{id}/members/{userId}
+// RemoveMember godoc
+//
+//	@Summary		Remove member from conversation
+//	@Description	Remove a member from a group conversation
+//	@Tags			conversations
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			userId	path		string	true	"User ID to remove"
+//	@Success		200	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/members/{userId} [delete]
 func (h *ConversationHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -283,16 +359,20 @@ func (h *ConversationHandler) RemoveMember(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Check caller is member
-	isMember, err := h.convs.IsMember(r.Context(), convID, userID)
-	if err != nil || !isMember {
-		writeError(w, http.StatusForbidden, "not a member of this conversation")
+	// Check caller is member and get their role
+	callerRole, err := h.convs.GetMemberRole(r.Context(), convID, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotMember) {
+			writeError(w, http.StatusForbidden, "not a member of this conversation")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to check membership")
 		return
 	}
 
-	// Can only remove self, or if admin (TODO: add admin check)
-	if userID != targetUserID {
-		writeError(w, http.StatusForbidden, "can only remove yourself from group")
+	// Can remove self, or admin can remove others
+	if userID != targetUserID && callerRole != domain.MemberRoleAdmin {
+		writeError(w, http.StatusForbidden, "only admins can remove other members")
 		return
 	}
 
@@ -305,11 +385,105 @@ func (h *ConversationHandler) RemoveMember(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "member removed"})
 }
 
+// UpdateConversation godoc
+//
+//	@Summary		Update conversation
+//	@Description	Update conversation title or settings
+//	@Tags			conversations
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			request	body		object{title=string}	true	"Update details"
+//	@Success		200	{object}	domain.Conversation
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id} [patch]
+func (h *ConversationHandler) UpdateConversation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	convID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return
+	}
+
+	var input struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate title
+	if input.Title == "" {
+		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if len(input.Title) > 100 {
+		writeError(w, http.StatusBadRequest, "title too long (max 100)")
+		return
+	}
+
+	// Check caller is admin
+	callerRole, err := h.convs.GetMemberRole(r.Context(), convID, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotMember) {
+			writeError(w, http.StatusForbidden, "not a member of this conversation")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to check membership")
+		return
+	}
+
+	if callerRole != domain.MemberRoleAdmin {
+		writeError(w, http.StatusForbidden, "only admins can rename the group")
+		return
+	}
+
+	if err := h.convs.UpdateTitle(r.Context(), convID, input.Title); err != nil {
+		if errors.Is(err, domain.ErrConversationNotFound) {
+			writeError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+		h.logger.Error("update conversation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to update conversation")
+		return
+	}
+
+	// Fetch updated conversation
+	conv, err := h.convs.GetByID(r.Context(), convID)
+	if err != nil {
+		h.logger.Error("fetch conversation failed", "error", err)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, conv)
+}
+
 // ============================================================================
 // Messages
 // ============================================================================
 
-// GetMessages handles GET /conversations/{id}/messages?before=<timestamp>&limit=50
+// GetMessages godoc
+//
+//	@Summary		Get messages
+//	@Description	Get messages from a conversation with pagination
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			before	query		string	false	"Cursor for pagination"
+//	@Param			limit	query		int	false	"Number of messages (default 50)"
+//	@Success		200	{object}	object{messages=[]domain.Message,has_more=bool}
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/messages [get]
 func (h *ConversationHandler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -365,7 +539,20 @@ func (h *ConversationHandler) GetMessages(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// SendMessage handles POST /conversations/{id}/messages
+// SendMessage godoc
+//
+//	@Summary		Send message
+//	@Description	Send a new message to a conversation
+//	@Tags			messages
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			request	body		object{body_text=string,attachment_id=string}	true	"Message content"
+//	@Success		201	{object}	domain.Message
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/messages [post]
 func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -434,7 +621,18 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 // Blocking
 // ============================================================================
 
-// BlockUser handles POST /blocks/{username}
+// BlockUser godoc
+//
+//	@Summary		Block user
+//	@Description	Block a user from contacting you
+//	@Tags			users
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			username	path		string	true	"Username to block"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/blocks/{username} [post]
 func (h *ConversationHandler) BlockUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -463,7 +661,18 @@ func (h *ConversationHandler) BlockUser(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "user blocked"})
 }
 
-// UnblockUser handles DELETE /blocks/{username}
+// UnblockUser godoc
+//
+//	@Summary		Unblock user
+//	@Description	Remove a user from your block list
+//	@Tags			users
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			username	path		string	true	"Username to unblock"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/blocks/{username} [delete]
 func (h *ConversationHandler) UnblockUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -485,4 +694,430 @@ func (h *ConversationHandler) UnblockUser(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "user unblocked"})
+}
+
+// ============================================================================
+// Starred Messages
+// ============================================================================
+
+// StarMessage godoc
+//
+//	@Summary		Star message
+//	@Description	Add a message to your starred list
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Message ID"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/messages/{id}/star [post]
+func (h *ConversationHandler) StarMessage(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	messageID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message ID")
+		return
+	}
+
+	// Get the message to check membership
+	msg, err := h.convs.GetMessageByID(r.Context(), messageID)
+	if err != nil {
+		if errors.Is(err, domain.ErrMessageNotFound) {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
+		h.logger.Error("get message failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get message")
+		return
+	}
+
+	// Check membership
+	isMember, err := h.convs.IsMember(r.Context(), msg.ConversationID, userID)
+	if err != nil || !isMember {
+		writeError(w, http.StatusForbidden, "not a member of this conversation")
+		return
+	}
+
+	if err := h.convs.StarMessage(r.Context(), userID, messageID); err != nil {
+		h.logger.Error("star message failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to star message")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "message starred"})
+}
+
+// UnstarMessage godoc
+//
+//	@Summary		Unstar message
+//	@Description	Remove a message from your starred list
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Message ID"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/messages/{id}/star [delete]
+func (h *ConversationHandler) UnstarMessage(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	messageID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message ID")
+		return
+	}
+
+	if err := h.convs.UnstarMessage(r.Context(), userID, messageID); err != nil {
+		h.logger.Error("unstar message failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to unstar message")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "message unstarred"})
+}
+
+// GetStarredMessages godoc
+//
+//	@Summary		Get starred messages
+//	@Description	Retrieve all messages you've starred
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			limit	query		int	false	"Result limit (default 50)"
+//	@Success		200	{object}	object{messages=[]domain.Message,count=int}
+//	@Failure		401	{object}	map[string]string
+//	@Router			/messages/starred [get]
+func (h *ConversationHandler) GetStarredMessages(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	messages, err := h.convs.GetStarredMessages(r.Context(), userID, limit)
+	if err != nil {
+		h.logger.Error("get starred messages failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get starred messages")
+		return
+	}
+
+	if messages == nil {
+		messages = []domain.Message{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"messages": messages,
+		"count":    len(messages),
+	})
+}
+
+// ============================================================================
+// Message Search
+// ============================================================================
+
+// SearchMessages godoc
+//
+//	@Summary		Search messages in conversation
+//	@Description	Full-text search within a specific conversation
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			q	query		string	true	"Search query"
+//	@Param			limit	query		int	false	"Result limit (default 20)"
+//	@Success		200	{object}	object{messages=[]domain.Message,count=int,query=string}
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/messages/search [get]
+func (h *ConversationHandler) SearchMessages(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	convID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return
+	}
+
+	// Check membership
+	isMember, err := h.convs.IsMember(r.Context(), convID, userID)
+	if err != nil || !isMember {
+		writeError(w, http.StatusForbidden, "not a member of this conversation")
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "search query is required")
+		return
+	}
+
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	messages, err := h.convs.SearchMessages(r.Context(), convID, query, limit)
+	if err != nil {
+		h.logger.Error("search messages failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to search messages")
+		return
+	}
+
+	if messages == nil {
+		messages = []domain.Message{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"messages": messages,
+		"count":    len(messages),
+		"query":    query,
+	})
+}
+
+// SearchAllMessages godoc
+//
+//	@Summary		Search all messages
+//	@Description	Full-text search across all conversations you're in
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			q	query		string	true	"Search query"
+//	@Param			limit	query		int	false	"Result limit (default 50)"
+//	@Success		200	{object}	object{messages=[]domain.Message,count=int,query=string}
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/messages/search [get]
+func (h *ConversationHandler) SearchAllMessages(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "search query is required")
+		return
+	}
+
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	messages, err := h.convs.SearchAllMessages(r.Context(), userID, query, limit)
+	if err != nil {
+		h.logger.Error("search all messages failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to search messages")
+		return
+	}
+
+	if messages == nil {
+		messages = []domain.Message{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"messages": messages,
+		"count":    len(messages),
+		"query":    query,
+	})
+}
+
+// ============================================================================
+// Archive
+// ============================================================================
+
+// ArchiveConversation godoc
+//
+//	@Summary		Archive conversation
+//	@Description	Move a conversation to the archive
+//	@Tags			conversations
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/archive [post]
+func (h *ConversationHandler) ArchiveConversation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	convID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return
+	}
+
+	// Check membership
+	isMember, err := h.convs.IsMember(r.Context(), convID, userID)
+	if err != nil || !isMember {
+		writeError(w, http.StatusForbidden, "not a member of this conversation")
+		return
+	}
+
+	if err := h.convs.ArchiveConversation(r.Context(), convID); err != nil {
+		h.logger.Error("archive conversation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to archive conversation")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "conversation archived"})
+}
+
+// UnarchiveConversation godoc
+//
+//	@Summary		Unarchive conversation
+//	@Description	Restore a conversation from the archive
+//	@Tags			conversations
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/unarchive [post]
+func (h *ConversationHandler) UnarchiveConversation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	convID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return
+	}
+
+	// Check membership
+	isMember, err := h.convs.IsMember(r.Context(), convID, userID)
+	if err != nil || !isMember {
+		writeError(w, http.StatusForbidden, "not a member of this conversation")
+		return
+	}
+
+	if err := h.convs.UnarchiveConversation(r.Context(), convID); err != nil {
+		h.logger.Error("unarchive conversation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to unarchive conversation")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "conversation unarchived"})
+}
+
+// ============================================================================
+// Read Status
+// ============================================================================
+
+// MarkConversationRead godoc
+//
+//	@Summary		Mark conversation as read
+//	@Description	Mark a conversation as read up to a specific message
+//	@Tags			conversations
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Conversation ID"
+//	@Param			request	body		object{message_id=string}	false	"Last read message"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/{id}/read [post]
+func (h *ConversationHandler) MarkConversationRead(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	convID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversation ID")
+		return
+	}
+
+	// Check membership
+	isMember, err := h.convs.IsMember(r.Context(), convID, userID)
+	if err != nil || !isMember {
+		writeError(w, http.StatusForbidden, "not a member of this conversation")
+		return
+	}
+
+	// Optional: include last message ID
+	var input struct {
+		MessageID string `json:"message_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&input)
+
+	var messageID *uuid.UUID
+	if input.MessageID != "" {
+		id, err := uuid.Parse(input.MessageID)
+		if err == nil {
+			messageID = &id
+		}
+	}
+
+	if err := h.convs.MarkConversationRead(r.Context(), convID, userID, messageID); err != nil {
+		h.logger.Error("mark conversation read failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to mark conversation read")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "marked as read"})
+}
+
+// MarkAllConversationsRead godoc
+//
+//	@Summary		Mark all conversations as read
+//	@Description	Mark all your conversations as read
+//	@Tags			conversations
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		200	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/conversations/mark-all-read [post]
+func (h *ConversationHandler) MarkAllConversationsRead(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if err := h.convs.MarkAllConversationsRead(r.Context(), userID); err != nil {
+		h.logger.Error("mark all read failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to mark all read")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "all conversations marked as read"})
 }

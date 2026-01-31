@@ -1,0 +1,1306 @@
+definitions:
+  github_com_observer_teatime_internal_auth.LoginInput:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_auth.RegisterInput:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+      username:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.Attachment:
+    properties:
+      bucket:
+        type: string
+      completed_at:
+        type: string
+      conversation_id:
+        type: string
+      created_at:
+        type: string
+      filename:
+        type: string
+      id:
+        type: string
+      mime_type:
+        type: string
+      object_key:
+        type: string
+      sha256:
+        type: string
+      size_bytes:
+        type: integer
+      status:
+        $ref: '#/definitions/github_com_observer_teatime_internal_domain.AttachmentStatus'
+      uploader_id:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.AttachmentDownloadResponse:
+    properties:
+      attachment_id:
+        type: string
+      download_url:
+        type: string
+      filename:
+        type: string
+      mime_type:
+        type: string
+      size_bytes:
+        type: integer
+    type: object
+  github_com_observer_teatime_internal_domain.AttachmentStatus:
+    enum:
+    - uploading
+    - ready
+    - error
+    type: string
+    x-enum-varnames:
+    - AttachmentStatusUploading
+    - AttachmentStatusReady
+    - AttachmentStatusError
+  github_com_observer_teatime_internal_domain.Conversation:
+    properties:
+      archived_at:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: string
+      last_message:
+        $ref: '#/definitions/github_com_observer_teatime_internal_domain.Message'
+      member_count:
+        type: integer
+      members:
+        description: Populated on fetch
+        items:
+          $ref: '#/definitions/github_com_observer_teatime_internal_domain.ConversationMember'
+        type: array
+      other_user:
+        allOf:
+        - $ref: '#/definitions/github_com_observer_teatime_internal_domain.PublicUser'
+        description: For DMs
+      title:
+        description: only for groups
+        type: string
+      type:
+        $ref: '#/definitions/github_com_observer_teatime_internal_domain.ConversationType'
+      unread_count:
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.ConversationMember:
+    properties:
+      conversation_id:
+        type: string
+      joined_at:
+        type: string
+      role:
+        $ref: '#/definitions/github_com_observer_teatime_internal_domain.MemberRole'
+      user:
+        allOf:
+        - $ref: '#/definitions/github_com_observer_teatime_internal_domain.PublicUser'
+        description: Populated on fetch
+      user_id:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.ConversationType:
+    enum:
+    - dm
+    - group
+    type: string
+    x-enum-varnames:
+    - ConversationTypeDM
+    - ConversationTypeGroup
+  github_com_observer_teatime_internal_domain.MemberRole:
+    enum:
+    - member
+    - admin
+    type: string
+    x-enum-varnames:
+    - MemberRoleMember
+    - MemberRoleAdmin
+  github_com_observer_teatime_internal_domain.Message:
+    properties:
+      attachment:
+        $ref: '#/definitions/github_com_observer_teatime_internal_domain.Attachment'
+      attachment_id:
+        description: Link to attachment
+        type: string
+      body_text:
+        type: string
+      conversation_id:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      sender:
+        allOf:
+        - $ref: '#/definitions/github_com_observer_teatime_internal_domain.PublicUser'
+        description: Populated on fetch
+      sender_id:
+        description: nil if sender deleted
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.PublicUser:
+    properties:
+      avatar_url:
+        type: string
+      display_name:
+        type: string
+      id:
+        type: string
+      username:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.UploadCompleteRequest:
+    properties:
+      attachment_id:
+        type: string
+      sha256:
+        type: string
+    type: object
+  github_com_observer_teatime_internal_domain.UploadInitRequest:
+    properties:
+      conversation_id:
+        type: string
+      filename:
+        type: string
+      mime_type:
+        type: string
+      size_bytes:
+        type: integer
+    type: object
+  github_com_observer_teatime_internal_domain.UploadInitResponse:
+    properties:
+      attachment_id:
+        type: string
+      object_key:
+        type: string
+      presigned_url:
+        type: string
+      required_headers:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
+info:
+  contact: {}
+paths:
+  /attachments/{id}/url:
+    get:
+      description: Get a presigned download URL for an attachment
+      parameters:
+      - description: Attachment ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Download URL generated
+          schema:
+            $ref: '#/definitions/github_com_observer_teatime_internal_domain.AttachmentDownloadResponse'
+        "403":
+          description: Not authorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Attachment not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get file download URL
+      tags:
+      - attachments
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate user with email/username and password
+      parameters:
+      - description: Login credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_observer_teatime_internal_auth.LoginInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Login successful
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Invalid credentials
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Login
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      description: Invalidate refresh token and clear cookies
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Logout
+      tags:
+      - auth
+  /auth/me:
+    get:
+      description: Get info about the currently authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              id:
+                type: string
+              username:
+                type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get authenticated user
+      tags:
+      - auth
+  /auth/refresh:
+    post:
+      description: Get a new access token using refresh token from cookie
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              access_token:
+                type: string
+              expires_at:
+                type: integer
+              user: {}
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Refresh token
+      tags:
+      - auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Create a new user account with username, email, and password
+      parameters:
+      - description: Registration details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_observer_teatime_internal_auth.RegisterInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: User created successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Username or email already exists
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
+  /blocks/{username}:
+    delete:
+      description: Remove a user from your block list
+      parameters:
+      - description: Username to unblock
+        in: path
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Unblock user
+      tags:
+      - users
+    post:
+      description: Block a user from contacting you
+      parameters:
+      - description: Username to block
+        in: path
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Block user
+      tags:
+      - users
+  /conversations:
+    get:
+      description: Get all conversations for the authenticated user
+      parameters:
+      - description: Include archived conversations
+        in: query
+        name: archived
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              conversations:
+                items:
+                  $ref: '#/definitions/github_com_observer_teatime_internal_domain.Conversation'
+                type: array
+              count:
+                type: integer
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List conversations
+      tags:
+      - conversations
+    post:
+      consumes:
+      - application/json
+      description: Create a new direct message or group conversation
+      parameters:
+      - description: Conversation details
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            member_ids:
+              items:
+                type: string
+              type: array
+            title:
+              type: string
+            type:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_observer_teatime_internal_domain.Conversation'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create conversation
+      tags:
+      - conversations
+  /conversations/{id}:
+    get:
+      description: Get details of a specific conversation including members
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_observer_teatime_internal_domain.Conversation'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get conversation details
+      tags:
+      - conversations
+    patch:
+      consumes:
+      - application/json
+      description: Update conversation title or settings
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update details
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            title:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_observer_teatime_internal_domain.Conversation'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update conversation
+      tags:
+      - conversations
+  /conversations/{id}/archive:
+    post:
+      description: Move a conversation to the archive
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Archive conversation
+      tags:
+      - conversations
+  /conversations/{id}/members:
+    post:
+      consumes:
+      - application/json
+      description: Add a new member to a group conversation
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User to add
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            user_id:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Add member to conversation
+      tags:
+      - conversations
+  /conversations/{id}/members/{userId}:
+    delete:
+      description: Remove a member from a group conversation
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID to remove
+        in: path
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Remove member from conversation
+      tags:
+      - conversations
+  /conversations/{id}/messages:
+    get:
+      description: Get messages from a conversation with pagination
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Cursor for pagination
+        in: query
+        name: before
+        type: string
+      - description: Number of messages (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              has_more:
+                type: boolean
+              messages:
+                items:
+                  $ref: '#/definitions/github_com_observer_teatime_internal_domain.Message'
+                type: array
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get messages
+      tags:
+      - messages
+    post:
+      consumes:
+      - application/json
+      description: Send a new message to a conversation
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Message content
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            attachment_id:
+              type: string
+            body_text:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_observer_teatime_internal_domain.Message'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Send message
+      tags:
+      - messages
+  /conversations/{id}/messages/search:
+    get:
+      description: Full-text search within a specific conversation
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Result limit (default 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              count:
+                type: integer
+              messages:
+                items:
+                  $ref: '#/definitions/github_com_observer_teatime_internal_domain.Message'
+                type: array
+              query:
+                type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Search messages in conversation
+      tags:
+      - messages
+  /conversations/{id}/read:
+    post:
+      consumes:
+      - application/json
+      description: Mark a conversation as read up to a specific message
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Last read message
+        in: body
+        name: request
+        schema:
+          properties:
+            message_id:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Mark conversation as read
+      tags:
+      - conversations
+  /conversations/{id}/unarchive:
+    post:
+      description: Restore a conversation from the archive
+      parameters:
+      - description: Conversation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Unarchive conversation
+      tags:
+      - conversations
+  /conversations/mark-all-read:
+    post:
+      description: Mark all your conversations as read
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Mark all conversations as read
+      tags:
+      - conversations
+  /messages/{id}/star:
+    delete:
+      description: Remove a message from your starred list
+      parameters:
+      - description: Message ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Unstar message
+      tags:
+      - messages
+    post:
+      description: Add a message to your starred list
+      parameters:
+      - description: Message ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Star message
+      tags:
+      - messages
+  /messages/search:
+    get:
+      description: Full-text search across all conversations you're in
+      parameters:
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Result limit (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              count:
+                type: integer
+              messages:
+                items:
+                  $ref: '#/definitions/github_com_observer_teatime_internal_domain.Message'
+                type: array
+              query:
+                type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Search all messages
+      tags:
+      - messages
+  /messages/starred:
+    get:
+      description: Retrieve all messages you've starred
+      parameters:
+      - description: Result limit (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              count:
+                type: integer
+              messages:
+                items:
+                  $ref: '#/definitions/github_com_observer_teatime_internal_domain.Message'
+                type: array
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get starred messages
+      tags:
+      - messages
+  /uploads/complete:
+    post:
+      consumes:
+      - application/json
+      description: Mark a file upload as complete after successfully uploading to
+        R2
+      parameters:
+      - description: Upload completion request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_observer_teatime_internal_domain.UploadCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Upload completed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Not authorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Attachment not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Complete file upload
+      tags:
+      - uploads
+  /uploads/init:
+    post:
+      consumes:
+      - application/json
+      description: Request a presigned URL for uploading a file to R2
+      parameters:
+      - description: Upload initialization request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_observer_teatime_internal_domain.UploadInitRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Presigned upload URL generated
+          schema:
+            $ref: '#/definitions/github_com_observer_teatime_internal_domain.UploadInitResponse'
+        "400":
+          description: Invalid input
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Not a member of conversation
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Initialize file upload
+      tags:
+      - uploads
+  /users/{username}:
+    get:
+      description: Retrieve user profile by username
+      parameters:
+      - description: Username
+        in: path
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema: {}
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get user by username
+      tags:
+      - users
+  /users/me:
+    get:
+      description: Retrieve your own user profile
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema: {}
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get your profile
+      tags:
+      - users
+    put:
+      consumes:
+      - application/json
+      description: Update your display name and avatar
+      parameters:
+      - description: Profile updates
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            avatar_url:
+              type: string
+            display_name:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema: {}
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update profile
+      tags:
+      - users
+  /users/search:
+    get:
+      description: Search for users by username
+      parameters:
+      - description: Search query (min 2 chars)
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Result limit (default 20, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              count:
+                type: integer
+              users:
+                items: {}
+                type: array
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Search users
+      tags:
+      - users
+swagger: "2.0"

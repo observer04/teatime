@@ -23,7 +23,17 @@ func NewUserHandler(users *database.UserRepository, logger *slog.Logger) *UserHa
 	}
 }
 
-// Search handles GET /users/search?q=...
+// Search godoc
+//
+//	@Summary		Search users
+//	@Description	Search for users by username
+//	@Tags			users
+//	@Produce		json
+//	@Param			q	query		string	true	"Search query (min 2 chars)"
+//	@Param			limit	query		int	false	"Result limit (default 20, max 50)"
+//	@Success		200	{object}	object{users=[]interface{},count=int}
+//	@Failure		400	{object}	map[string]string
+//	@Router			/users/search [get]
 func (h *UserHandler) Search(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if len(query) < 2 {
@@ -58,7 +68,17 @@ func (h *UserHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetByUsername handles GET /users/{username}
+// GetByUsername godoc
+//
+//	@Summary		Get user by username
+//	@Description	Retrieve user profile by username
+//	@Tags			users
+//	@Produce		json
+//	@Param			username	path		string	true	"Username"
+//	@Success		200	{object}	interface{}
+//	@Failure		400	{object}	map[string]string
+//	@Failure		404	{object}	map[string]string
+//	@Router			/users/{username} [get]
 func (h *UserHandler) GetByUsername(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 	if username == "" {
@@ -75,7 +95,19 @@ func (h *UserHandler) GetByUsername(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user.ToPublic())
 }
 
-// UpdateProfile handles PUT /users/me
+// UpdateProfile godoc
+//
+//	@Summary		Update profile
+//	@Description	Update your display name and avatar
+//	@Tags			users
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			request	body		object{display_name=string,avatar_url=string}	true	"Profile updates"
+//	@Success		200	{object}	interface{}
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/users/me [put]
 func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {
@@ -122,7 +154,16 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user.ToPublic())
 }
 
-// GetMe handles GET /users/me - returns full user info
+// GetMe godoc
+//
+//	@Summary		Get your profile
+//	@Description	Retrieve your own user profile
+//	@Tags			users
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		200	{object}	interface{}
+//	@Failure		401	{object}	map[string]string
+//	@Router			/users/me [get]
 func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.GetUserID(r.Context())
 	if !ok {

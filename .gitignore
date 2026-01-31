@@ -18,6 +18,7 @@ web/dist/
 # ==============================================================================
 # Environment & Secrets
 # ==============================================================================
+.env.*
 .env
 .env.local
 .env.production
@@ -52,3 +53,15 @@ logs/
 # Docker (local volumes if mounted)
 # ==============================================================================
 postgres_data/
+
+*.md
+!README.md
+
+# ==============================================================================
+# Windows Zone Identifier files (alternate data streams)
+# ==============================================================================
+*:Zone.Identifier
+*.Zone.Identifier
+Zone.Identifier
+
+.env.example

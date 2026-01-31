@@ -59,7 +59,7 @@ class ApiService {
       let data = {};
       try {
         data = await response.json();
-      } catch (err) {
+      } catch {
         // ignore JSON parse errors for empty responses
         data = {};
       }
@@ -103,16 +103,98 @@ class ApiService {
     return this.request('/conversations');
   }
 
-  async createConversation(type, memberIds) {
+  async createConversation(type, memberIds, title = null) {
     return this.request('/conversations', {
       method: 'POST',
-      body: JSON.stringify({ type, member_ids: memberIds }),
+      body: JSON.stringify({ type, member_ids: memberIds, title }),
     });
   }
 
-  async getMessages(conversationId) {
-    return this.request(`/conversations/${conversationId}/messages`);
+  async updateConversation(conversationId, title) {
+    return this.request(`/conversations/${conversationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    });
+  }
+
+  async addMember(conversationId, userId) {
+    return this.request(`/conversations/${conversationId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId }),
+    });
+  }
+
+  async removeMember(conversationId, userId) {
+    return this.request(`/conversations/${conversationId}/members/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getMessages(conversationId, before = null, limit = 50) {
+    let url = `/conversations/${conversationId}/messages?limit=${limit}`;
+    if (before) {
+      url += `&before=${encodeURIComponent(before)}`;
+    }
+    return this.request(url);
+  }
+
+  // Archive
+  async archiveConversation(conversationId) {
+    return this.request(`/conversations/${conversationId}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  async unarchiveConversation(conversationId) {
+    return this.request(`/conversations/${conversationId}/unarchive`, {
+      method: 'POST',
+    });
+  }
+
+  async getArchivedConversations() {
+    return this.request('/conversations?archived=true');
+  }
+
+  // Starred Messages
+  async starMessage(messageId) {
+    return this.request(`/messages/${messageId}/star`, {
+      method: 'POST',
+    });
+  }
+
+  async unstarMessage(messageId) {
+    return this.request(`/messages/${messageId}/star`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getStarredMessages(limit = 50) {
+    return this.request(`/messages/starred?limit=${limit}`);
+  }
+
+  // Search
+  async searchMessages(conversationId, query, limit = 50) {
+    return this.request(`/conversations/${conversationId}/messages/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  }
+
+  async searchAllMessages(query, limit = 50) {
+    return this.request(`/messages/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  }
+
+  // Read Status
+  async markConversationRead(conversationId, messageId = null) {
+    return this.request(`/conversations/${conversationId}/read`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId }),
+    });
+  }
+
+  async markAllConversationsRead() {
+    return this.request('/conversations/mark-all-read', {
+      method: 'POST',
+    });
   }
 }
 
+export const API_BASE_URL = API_BASE;
 export default new ApiService();

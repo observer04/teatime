@@ -5,25 +5,33 @@ import (
 	"net/http"
 	"time"
 
+	httpSwagger "github.com/swaggo/http-swagger/v2"
+
+	_ "github.com/observer/teatime/docs" // Import generated docs
+
 	"github.com/observer/teatime/internal/api"
 	"github.com/observer/teatime/internal/auth"
 	"github.com/observer/teatime/internal/config"
 	"github.com/observer/teatime/internal/database"
+	"github.com/observer/teatime/internal/storage"
 	"github.com/observer/teatime/internal/websocket"
 )
 
 // Dependencies holds all service dependencies for the server
 type Dependencies struct {
-	DB          *database.DB
-	UserRepo    *database.UserRepository
-	ConvRepo    *database.ConversationRepository
-	AuthService *auth.Service
-	AuthHandler *api.AuthHandler
-	UserHandler *api.UserHandler
-	ConvHandler *api.ConversationHandler
-	WSHandler   *websocket.Handler
-	StaticDir   string
-	Logger      *slog.Logger
+	DB             *database.DB
+	UserRepo       *database.UserRepository
+	ConvRepo       *database.ConversationRepository
+	AttachmentRepo *database.AttachmentRepository
+	R2Storage      *storage.R2Storage
+	AuthService    *auth.Service
+	AuthHandler    *api.AuthHandler
+	UserHandler    *api.UserHandler
+	ConvHandler    *api.ConversationHandler
+	UploadHandler  *api.UploadHandler
+	WSHandler      *websocket.Handler
+	StaticDir      string
+	Logger         *slog.Logger
 }
 
 // New creates an HTTP server with all routes configured.
@@ -51,6 +59,9 @@ func New(cfg *config.Config, deps *Dependencies) *http.Server {
 }
 
 func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) {
+	// Swagger UI - API documentation
+	mux.HandleFunc("GET /swagger/", httpSwagger.WrapHandler)
+
 	// Health check - essential for docker, k8s, load balancers
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -101,20 +112,41 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 	mux.Handle("POST /conversations", authMiddleware(http.HandlerFunc(deps.ConvHandler.CreateConversation)))
 	mux.Handle("GET /conversations", authMiddleware(http.HandlerFunc(deps.ConvHandler.ListConversations)))
 	mux.Handle("GET /conversations/{id}", authMiddleware(http.HandlerFunc(deps.ConvHandler.GetConversation)))
+	mux.Handle("PATCH /conversations/{id}", authMiddleware(http.HandlerFunc(deps.ConvHandler.UpdateConversation)))
 	mux.Handle("POST /conversations/{id}/members", authMiddleware(http.HandlerFunc(deps.ConvHandler.AddMember)))
 	mux.Handle("DELETE /conversations/{id}/members/{userId}", authMiddleware(http.HandlerFunc(deps.ConvHandler.RemoveMember)))
+	mux.Handle("POST /conversations/{id}/archive", authMiddleware(http.HandlerFunc(deps.ConvHandler.ArchiveConversation)))
+	mux.Handle("POST /conversations/{id}/unarchive", authMiddleware(http.HandlerFunc(deps.ConvHandler.UnarchiveConversation)))
+	mux.Handle("POST /conversations/{id}/read", authMiddleware(http.HandlerFunc(deps.ConvHandler.MarkConversationRead)))
+	mux.Handle("POST /conversations/mark-all-read", authMiddleware(http.HandlerFunc(deps.ConvHandler.MarkAllConversationsRead)))
 
 	// =========================================================================
 	// Message routes
 	// =========================================================================
 	mux.Handle("GET /conversations/{id}/messages", authMiddleware(http.HandlerFunc(deps.ConvHandler.GetMessages)))
 	mux.Handle("POST /conversations/{id}/messages", authMiddleware(http.HandlerFunc(deps.ConvHandler.SendMessage)))
+	mux.Handle("GET /conversations/{id}/messages/search", authMiddleware(http.HandlerFunc(deps.ConvHandler.SearchMessages)))
+
+	// =========================================================================
+	// Starred messages routes
+	// =========================================================================
+	mux.Handle("GET /messages/starred", authMiddleware(http.HandlerFunc(deps.ConvHandler.GetStarredMessages)))
+	mux.Handle("GET /messages/search", authMiddleware(http.HandlerFunc(deps.ConvHandler.SearchAllMessages)))
+	mux.Handle("POST /messages/{id}/star", authMiddleware(http.HandlerFunc(deps.ConvHandler.StarMessage)))
+	mux.Handle("DELETE /messages/{id}/star", authMiddleware(http.HandlerFunc(deps.ConvHandler.UnstarMessage)))
 
 	// =========================================================================
 	// Block routes
 	// =========================================================================
 	mux.Handle("POST /blocks/{username}", authMiddleware(http.HandlerFunc(deps.ConvHandler.BlockUser)))
 	mux.Handle("DELETE /blocks/{username}", authMiddleware(http.HandlerFunc(deps.ConvHandler.UnblockUser)))
+
+	// =========================================================================
+	// Upload routes (file attachments)
+	// =========================================================================
+	mux.Handle("POST /uploads/init", authMiddleware(http.HandlerFunc(deps.UploadHandler.InitUpload)))
+	mux.Handle("POST /uploads/complete", authMiddleware(http.HandlerFunc(deps.UploadHandler.CompleteUpload)))
+	mux.Handle("GET /attachments/{id}/url", authMiddleware(http.HandlerFunc(deps.UploadHandler.GetAttachmentURL)))
 
 	// =========================================================================
 	// WebSocket route

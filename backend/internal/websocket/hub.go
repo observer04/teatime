@@ -11,6 +11,8 @@ import (
 	"github.com/observer/teatime/internal/auth"
 	"github.com/observer/teatime/internal/database"
 	"github.com/observer/teatime/internal/domain"
+	"github.com/observer/teatime/internal/pubsub"
+	"github.com/observer/teatime/internal/webrtc"
 )
 
 // Hub maintains the set of active clients and broadcasts messages
@@ -31,24 +33,38 @@ type Hub struct {
 	mu sync.RWMutex
 
 	// Dependencies
-	authService *auth.Service
-	convRepo    *database.ConversationRepository
-	userRepo    *database.UserRepository
-	logger      *slog.Logger
+	authService    *auth.Service
+	convRepo       *database.ConversationRepository
+	userRepo       *database.UserRepository
+	attachmentRepo *database.AttachmentRepository
+	pubsub         pubsub.PubSub
+	callHandler    *webrtc.CallHandler
+	logger         *slog.Logger
+
+	// PubSub subscriptions for room-level events
+	roomSubs map[uuid.UUID]pubsub.Subscription
 }
 
 // NewHub creates a new Hub
-func NewHub(authService *auth.Service, convRepo *database.ConversationRepository, userRepo *database.UserRepository, logger *slog.Logger) *Hub {
+func NewHub(authService *auth.Service, convRepo *database.ConversationRepository, userRepo *database.UserRepository, attachmentRepo *database.AttachmentRepository, ps pubsub.PubSub, logger *slog.Logger) *Hub {
 	return &Hub{
-		clients:     make(map[uuid.UUID]map[*Client]bool),
-		rooms:       make(map[uuid.UUID]map[*Client]bool),
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		authService: authService,
-		convRepo:    convRepo,
-		userRepo:    userRepo,
-		logger:      logger,
+		clients:        make(map[uuid.UUID]map[*Client]bool),
+		rooms:          make(map[uuid.UUID]map[*Client]bool),
+		register:       make(chan *Client),
+		unregister:     make(chan *Client),
+		authService:    authService,
+		convRepo:       convRepo,
+		userRepo:       userRepo,
+		attachmentRepo: attachmentRepo,
+		pubsub:         ps,
+		roomSubs:       make(map[uuid.UUID]pubsub.Subscription),
+		logger:         logger,
 	}
+}
+
+// SetCallHandler sets the WebRTC call handler for processing call events
+func (h *Hub) SetCallHandler(ch *webrtc.CallHandler) {
+	h.callHandler = ch
 }
 
 // Run starts the hub's main loop
@@ -84,8 +100,15 @@ func (h *Hub) handleRegister(client *Client) {
 }
 
 func (h *Hub) handleUnregister(client *Client) {
+	// Cleanup user subscription
+	client.mu.Lock()
+	if client.userSub != nil {
+		client.userSub.Unsubscribe()
+		client.userSub = nil
+	}
+	client.mu.Unlock()
+
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	userID := client.UserID()
 	if userID != uuid.Nil {
@@ -99,14 +122,23 @@ func (h *Hub) handleUnregister(client *Client) {
 		}
 	}
 
-	// Remove from all rooms
+	// Remove from all rooms and track which rooms need unsubscribe
+	roomsToCheck := make([]uuid.UUID, 0, len(client.rooms))
 	for roomID := range client.rooms {
 		if room, ok := h.rooms[roomID]; ok {
 			delete(room, client)
 			if len(room) == 0 {
 				delete(h.rooms, roomID)
+				roomsToCheck = append(roomsToCheck, roomID)
 			}
 		}
+	}
+
+	h.mu.Unlock()
+
+	// Unsubscribe from empty rooms (outside lock)
+	for _, roomID := range roomsToCheck {
+		h.unsubscribeFromRoom(roomID)
 	}
 
 	close(client.send)
@@ -128,6 +160,17 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleTyping(client, msg.Payload, true)
 	case EventTypeTypingStop:
 		h.handleTyping(client, msg.Payload, false)
+	// WebRTC call events
+	case webrtc.EventTypeCallJoin:
+		h.handleCallJoin(client, msg.Payload)
+	case webrtc.EventTypeCallLeave:
+		h.handleCallLeave(client, msg.Payload)
+	case webrtc.EventTypeCallOffer:
+		h.handleCallOffer(client, msg.Payload)
+	case webrtc.EventTypeCallAnswer:
+		h.handleCallAnswer(client, msg.Payload)
+	case webrtc.EventTypeCallICECandidate:
+		h.handleCallICECandidate(client, msg.Payload)
 	default:
 		client.sendError("unknown_event", "Unknown event type: "+msg.Type)
 	}
@@ -166,6 +209,9 @@ func (h *Hub) handleAuth(client *Client, payload json.RawMessage) {
 	client.Send(msg)
 
 	h.logger.Info("client authenticated", "user_id", claims.UserID, "username", claims.Username)
+
+	// Subscribe user to their personal event channel
+	h.subscribeUserToEvents(client, claims.UserID)
 }
 
 func (h *Hub) handleRoomJoin(client *Client, payload json.RawMessage) {
@@ -203,6 +249,9 @@ func (h *Hub) handleRoomJoin(client *Client, payload json.RawMessage) {
 	}
 	h.rooms[convID][client] = true
 	h.mu.Unlock()
+
+	// Ensure we're subscribed to room events via PubSub
+	h.subscribeToRoom(convID)
 
 	h.logger.Debug("client joined room", "user_id", client.UserID(), "room_id", convID)
 }
@@ -248,7 +297,7 @@ func (h *Hub) handleMessageSend(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	if p.BodyText == "" {
+	if p.BodyText == "" && p.AttachmentID == "" {
 		client.sendError("empty_message", "Message cannot be empty")
 		return
 	}
@@ -276,11 +325,36 @@ func (h *Hub) handleMessageSend(client *Client, payload json.RawMessage) {
 		CreatedAt:      time.Now(),
 	}
 
+	// Add attachment if provided
+	if p.AttachmentID != "" {
+		attachmentUUID, err := uuid.Parse(p.AttachmentID)
+		if err != nil {
+			client.sendError("invalid_attachment", "Invalid attachment ID")
+			return
+		}
+		msg.AttachmentID = &attachmentUUID
+	}
+
 	// Save to database
 	if err := h.convRepo.CreateMessage(ctx, msg); err != nil {
 		h.logger.Error("failed to save message", "error", err)
 		client.sendError("save_failed", "Failed to save message")
 		return
+	}
+
+	// Fetch attachment details if present
+	var attachmentPayload *AttachmentPayload
+	if msg.AttachmentID != nil {
+		attachment, err := h.attachmentRepo.GetAttachmentByID(ctx, msg.AttachmentID.String())
+		if err == nil {
+			attachmentID, _ := uuid.Parse(attachment.ID)
+			attachmentPayload = &AttachmentPayload{
+				ID:        attachmentID,
+				Filename:  attachment.Filename,
+				MimeType:  attachment.MimeType,
+				SizeBytes: attachment.SizeBytes,
+			}
+		}
 	}
 
 	// Broadcast to room
@@ -290,6 +364,8 @@ func (h *Hub) handleMessageSend(client *Client, payload json.RawMessage) {
 		SenderID:       userID,
 		SenderUsername: client.Username(),
 		BodyText:       msg.BodyText,
+		AttachmentID:   msg.AttachmentID,
+		Attachment:     attachmentPayload,
 		CreatedAt:      msg.CreatedAt,
 		TempID:         p.TempID,
 	}
@@ -323,35 +399,136 @@ func (h *Hub) handleTyping(client *Client, payload json.RawMessage, isTyping boo
 	h.BroadcastToRoomExcept(convID, client, EventTypeTyping, broadcastPayload)
 }
 
-// BroadcastToRoom sends a message to all clients in a room
-func (h *Hub) BroadcastToRoom(roomID uuid.UUID, eventType string, payload interface{}) {
-	h.mu.RLock()
-	room, ok := h.rooms[roomID]
-	if !ok {
-		h.mu.RUnlock()
+// ============================================================================
+// WebRTC Call Handlers
+// ============================================================================
+
+func (h *Hub) handleCallJoin(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		client.sendError("not_authenticated", "Must authenticate first")
 		return
 	}
 
-	// Copy clients to avoid holding lock during send
-	clients := make([]*Client, 0, len(room))
-	for client := range room {
-		clients = append(clients, client)
+	if h.callHandler == nil {
+		client.sendError("calls_disabled", "Video calls are not enabled")
+		return
 	}
-	h.mu.RUnlock()
 
-	msg, err := NewMessage(eventType, payload)
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	config, err := h.callHandler.HandleJoin(context.Background(), sigCtx, payload)
 	if err != nil {
-		h.logger.Error("failed to create broadcast message", "error", err)
+		if callErr, ok := err.(*webrtc.CallError); ok {
+			client.sendError(callErr.Code, callErr.Message)
+		} else {
+			client.sendError("call_error", err.Error())
+		}
 		return
 	}
 
-	for _, client := range clients {
-		client.Send(msg)
+	// Send config back to client
+	msg, _ := NewMessage(webrtc.EventTypeCallConfig, config)
+	client.Send(msg)
+}
+
+func (h *Hub) handleCallLeave(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.callHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	h.callHandler.HandleLeave(context.Background(), sigCtx, payload)
+}
+
+func (h *Hub) handleCallOffer(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		client.sendError("not_authenticated", "Must authenticate first")
+		return
+	}
+
+	if h.callHandler == nil {
+		client.sendError("calls_disabled", "Video calls are not enabled")
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	if err := h.callHandler.HandleOffer(context.Background(), sigCtx, payload); err != nil {
+		if callErr, ok := err.(*webrtc.CallError); ok {
+			client.sendError(callErr.Code, callErr.Message)
+		}
 	}
 }
 
-// BroadcastToRoomExcept sends to all room members except one
+func (h *Hub) handleCallAnswer(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		client.sendError("not_authenticated", "Must authenticate first")
+		return
+	}
+
+	if h.callHandler == nil {
+		client.sendError("calls_disabled", "Video calls are not enabled")
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	if err := h.callHandler.HandleAnswer(context.Background(), sigCtx, payload); err != nil {
+		if callErr, ok := err.(*webrtc.CallError); ok {
+			client.sendError(callErr.Code, callErr.Message)
+		}
+	}
+}
+
+func (h *Hub) handleCallICECandidate(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.callHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	h.callHandler.HandleICECandidate(context.Background(), sigCtx, payload)
+}
+
+// BroadcastToRoom sends a message to all clients in a room via PubSub
+func (h *Hub) BroadcastToRoom(roomID uuid.UUID, eventType string, payload interface{}) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("failed to marshal broadcast payload", "error", err)
+		return
+	}
+
+	msg := &pubsub.Message{
+		Topic:   pubsub.Topics.Room(roomID.String()),
+		Type:    eventType,
+		Payload: payloadBytes,
+	}
+
+	if err := h.pubsub.Publish(context.Background(), msg.Topic, msg); err != nil {
+		h.logger.Error("failed to publish to room", "room_id", roomID, "error", err)
+	}
+}
+
+// BroadcastToRoomExcept sends to all room members except one (for typing indicators etc)
 func (h *Hub) BroadcastToRoomExcept(roomID uuid.UUID, except *Client, eventType string, payload interface{}) {
+	// For local broadcasts with exceptions, we use direct delivery
+	// since PubSub doesn't support exception-based filtering
 	h.mu.RLock()
 	room, ok := h.rooms[roomID]
 	if !ok {
@@ -379,27 +556,106 @@ func (h *Hub) BroadcastToRoomExcept(roomID uuid.UUID, except *Client, eventType 
 
 // BroadcastToUser sends to all connections of a specific user
 func (h *Hub) BroadcastToUser(userID uuid.UUID, eventType string, payload interface{}) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("failed to marshal user broadcast payload", "error", err)
+		return
+	}
+
+	msg := &pubsub.Message{
+		Topic:   pubsub.Topics.User(userID.String()),
+		Type:    eventType,
+		Payload: payloadBytes,
+	}
+
+	if err := h.pubsub.Publish(context.Background(), msg.Topic, msg); err != nil {
+		h.logger.Error("failed to publish to user", "user_id", userID, "error", err)
+	}
+}
+
+// subscribeToRoom creates a PubSub subscription for a room if one doesn't exist
+func (h *Hub) subscribeToRoom(roomID uuid.UUID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if _, exists := h.roomSubs[roomID]; exists {
+		return // Already subscribed
+	}
+
+	topic := pubsub.Topics.Room(roomID.String())
+	sub, err := h.pubsub.Subscribe(context.Background(), topic, func(ctx context.Context, msg *pubsub.Message) {
+		h.deliverToRoom(roomID, msg)
+	})
+	if err != nil {
+		h.logger.Error("failed to subscribe to room", "room_id", roomID, "error", err)
+		return
+	}
+
+	h.roomSubs[roomID] = sub
+}
+
+// unsubscribeFromRoom removes PubSub subscription when no local clients remain
+func (h *Hub) unsubscribeFromRoom(roomID uuid.UUID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Only unsubscribe if no local clients remain in the room
+	if room, ok := h.rooms[roomID]; ok && len(room) > 0 {
+		return
+	}
+
+	if sub, ok := h.roomSubs[roomID]; ok {
+		sub.Unsubscribe()
+		delete(h.roomSubs, roomID)
+	}
+}
+
+// deliverToRoom delivers a PubSub message to all local clients in a room
+func (h *Hub) deliverToRoom(roomID uuid.UUID, psMsg *pubsub.Message) {
 	h.mu.RLock()
-	userClients, ok := h.clients[userID]
+	room, ok := h.rooms[roomID]
 	if !ok {
 		h.mu.RUnlock()
 		return
 	}
 
-	clients := make([]*Client, 0, len(userClients))
-	for client := range userClients {
+	clients := make([]*Client, 0, len(room))
+	for client := range room {
 		clients = append(clients, client)
 	}
 	h.mu.RUnlock()
 
-	msg, err := NewMessage(eventType, payload)
-	if err != nil {
-		return
+	msg := &Message{
+		Type:      psMsg.Type,
+		Payload:   psMsg.Payload,
+		Timestamp: time.Now(),
 	}
 
 	for _, client := range clients {
 		client.Send(msg)
 	}
+}
+
+// subscribeUserToEvents creates PubSub subscription for user-specific events
+func (h *Hub) subscribeUserToEvents(client *Client, userID uuid.UUID) {
+	topic := pubsub.Topics.User(userID.String())
+	sub, err := h.pubsub.Subscribe(context.Background(), topic, func(ctx context.Context, msg *pubsub.Message) {
+		wsMsg := &Message{
+			Type:      msg.Type,
+			Payload:   msg.Payload,
+			Timestamp: time.Now(),
+		}
+		client.Send(wsMsg)
+	})
+	if err != nil {
+		h.logger.Error("failed to subscribe user to events", "user_id", userID, "error", err)
+		return
+	}
+
+	// Store subscription on client for cleanup (we'll add this tracking)
+	client.mu.Lock()
+	client.userSub = sub
+	client.mu.Unlock()
 }
 
 // GetOnlineUserIDs returns IDs of all online users

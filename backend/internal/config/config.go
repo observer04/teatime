@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config holds all application configuration.
@@ -26,6 +27,20 @@ type Config struct {
 
 	// Static files
 	StaticDir string
+
+	// WebRTC / TURN
+	ICESTUNURLs  []string
+	ICETURNURLs  []string
+	TURNUsername string
+	TURNPassword string
+
+	// R2 / File Storage
+	R2AccountID       string
+	R2AccessKeyID     string
+	R2SecretAccessKey string
+	R2Bucket          string
+	R2Endpoint        string
+	MaxUploadBytes    int64
 }
 
 // Load reads configuration from environment variables.
@@ -44,6 +59,20 @@ func Load() (*Config, error) {
 	cfg.GitHubClientID = os.Getenv("GITHUB_CLIENT_ID")
 	cfg.GitHubSecret = os.Getenv("GITHUB_CLIENT_SECRET")
 	cfg.StaticDir = os.Getenv("STATIC_DIR")
+
+	// WebRTC / TURN configuration
+	cfg.ICESTUNURLs = splitEnv("ICE_STUN_URLS", "stun:stun.l.google.com:19302")
+	cfg.ICETURNURLs = splitEnv("ICE_TURN_URLS", "")
+	cfg.TURNUsername = os.Getenv("TURN_USERNAME")
+	cfg.TURNPassword = os.Getenv("TURN_PASSWORD")
+
+	// R2 / File Storage configuration
+	cfg.R2AccountID = os.Getenv("R2_ACCOUNT_ID")
+	cfg.R2AccessKeyID = os.Getenv("R2_ACCESS_KEY_ID")
+	cfg.R2SecretAccessKey = os.Getenv("R2_SECRET_ACCESS_KEY")
+	cfg.R2Bucket = os.Getenv("R2_BUCKET")
+	cfg.R2Endpoint = getEnvOrDefault("R2_ENDPOINT", fmt.Sprintf("https://%s.r2.cloudflarestorage.com", cfg.R2AccountID))
+	cfg.MaxUploadBytes = 100 * 1024 * 1024 // 100MB default
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -68,4 +97,24 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// splitEnv splits a comma-separated env var into a slice
+func splitEnv(key, defaultVal string) []string {
+	val := os.Getenv(key)
+	if val == "" {
+		val = defaultVal
+	}
+	if val == "" {
+		return nil
+	}
+	parts := strings.Split(val, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }

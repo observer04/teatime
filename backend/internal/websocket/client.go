@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/observer/teatime/internal/pubsub"
 )
 
 const (
@@ -32,7 +33,8 @@ type Client struct {
 	send     chan []byte
 	userID   uuid.UUID
 	username string
-	rooms    map[uuid.UUID]bool // conversation IDs this client is subscribed to
+	rooms    map[uuid.UUID]bool  // conversation IDs this client is subscribed to
+	userSub  pubsub.Subscription // subscription for user-specific events
 	mu       sync.RWMutex
 	logger   *slog.Logger
 	cancel   context.CancelFunc

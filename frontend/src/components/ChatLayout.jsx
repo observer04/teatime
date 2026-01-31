@@ -7,7 +7,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 export default function ChatLayout({ user, token, onLogout }) {
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [_loading, setLoading] = useState(true);
 
   const {
     isConnected,
@@ -68,6 +68,21 @@ export default function ChatLayout({ user, token, onLogout }) {
     }
   };
 
+  const handleCreateGroup = async (title, memberIds) => {
+    try {
+      const data = await api.createConversation('group', memberIds, title);
+      await loadConversations();
+      
+      // Select the new group
+      if (data) {
+        selectConversation(data);
+      }
+    } catch (error) {
+      console.error('Failed to create group:', error);
+      throw error;
+    }
+  };
+
   return (
     <div className="h-screen flex bg-gray-100">
       <Sidebar
@@ -76,6 +91,7 @@ export default function ChatLayout({ user, token, onLogout }) {
         currentConversation={currentConversation}
         onSelectConversation={selectConversation}
         onCreateDM={handleCreateDM}
+        onCreateGroup={handleCreateGroup}
         onLogout={onLogout}
         isConnected={isConnected}
       />

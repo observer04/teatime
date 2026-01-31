@@ -1,16 +1,57 @@
-# React + Vite
+# TeaTime Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A React-based chat application frontend built with Vite.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Direct Messages (DM)**: 1-on-1 private conversations
+- **Group Chat**: Create and manage group conversations
+  - Create groups with custom names
+  - Add/remove members
+  - View member list with roles (admin/member)
+- **Real-time Messaging**: WebSocket-based instant messaging
+- **Typing Indicators**: See when others are typing
+- **Responsive Design**: Tailwind CSS-based styling
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+# Install dependencies
+npm install
 
-## Expanding the ESLint configuration
+# Start dev server
+npm run dev
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+# Build for production
+npm run build
+```
+
+## Environment Variables
+
+Create a `.env` file with:
+
+```
+VITE_API_BASE=http://localhost:8080
+VITE_WS_BASE=ws://localhost:8080/ws
+```
+
+## Architecture
+
+- `src/components/` - React components
+  - `AuthPage.jsx` - Login/Register forms
+  - `ChatLayout.jsx` - Main chat layout orchestrator
+  - `Sidebar.jsx` - Conversation list + new chat modal
+  - `ChatWindow.jsx` - Message display + input
+- `src/hooks/` - Custom React hooks
+  - `useAuth.js` - Authentication state management
+  - `useWebSocket.js` - WebSocket connection + message handling
+- `src/services/` - API and WebSocket clients
+  - `api.js` - REST API client
+  - `websocket.js` - WebSocket wrapper
+
+## Tech Stack
+
+- React 18
+- Vite
+- Tailwind CSS
+- WebSocket (native)

@@ -13,7 +13,10 @@ import (
 	"github.com/observer/teatime/internal/auth"
 	"github.com/observer/teatime/internal/config"
 	"github.com/observer/teatime/internal/database"
+	"github.com/observer/teatime/internal/pubsub"
 	"github.com/observer/teatime/internal/server"
+	"github.com/observer/teatime/internal/storage"
+	"github.com/observer/teatime/internal/webrtc"
 	"github.com/observer/teatime/internal/websocket"
 )
 
@@ -52,6 +55,7 @@ func main() {
 	// Initialize repositories
 	userRepo := database.NewUserRepository(db)
 	convRepo := database.NewConversationRepository(db)
+	attachmentRepo := database.NewAttachmentRepository(db.Pool)
 
 	// Initialize token service (use a default key for dev if not set)
 	jwtKey := cfg.JWTSigningKey
@@ -79,8 +83,38 @@ func main() {
 	userHandler := api.NewUserHandler(userRepo, logger)
 	convHandler := api.NewConversationHandler(convRepo, userRepo, logger)
 
+	// Initialize R2 storage (optional - skip if not configured)
+	var r2Storage *storage.R2Storage
+	var uploadHandler *api.UploadHandler
+	if cfg.R2AccountID != "" && cfg.R2AccessKeyID != "" && cfg.R2SecretAccessKey != "" && cfg.R2Bucket != "" {
+		r2Storage, err = storage.NewR2Storage(cfg.R2AccountID, cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Bucket)
+		if err != nil {
+			slog.Error("failed to initialize R2 storage", "error", err)
+			os.Exit(1)
+		}
+		uploadHandler = api.NewUploadHandler(attachmentRepo, convRepo, r2Storage, cfg.MaxUploadBytes, cfg.R2Bucket)
+		slog.Info("R2 storage initialized", "bucket", cfg.R2Bucket)
+	} else {
+		slog.Warn("R2 storage not configured - file uploads disabled")
+	}
+
+	// Initialize PubSub (in-memory for single instance, swap for Redis in production)
+	ps := pubsub.NewMemoryPubSub()
+	defer ps.Close()
+
+	// Initialize WebRTC manager
+	webrtcConfig := &webrtc.Config{
+		STUNURLs:     cfg.ICESTUNURLs,
+		TURNURLs:     cfg.ICETURNURLs,
+		TURNUsername: cfg.TURNUsername,
+		TURNPassword: cfg.TURNPassword,
+	}
+	webrtcManager := webrtc.NewManager(webrtcConfig, ps, logger)
+	callHandler := webrtc.NewCallHandler(webrtcManager, convRepo, ps, logger)
+
 	// Initialize WebSocket hub and handler
-	wsHub := websocket.NewHub(authService, convRepo, userRepo, logger)
+	wsHub := websocket.NewHub(authService, convRepo, userRepo, attachmentRepo, ps, logger)
+	wsHub.SetCallHandler(callHandler)
 	go wsHub.Run(context.Background())
 	wsHandler := websocket.NewHandler(wsHub, logger)
 
@@ -92,16 +126,19 @@ func main() {
 
 	// Create and start server
 	deps := &server.Dependencies{
-		DB:          db,
-		UserRepo:    userRepo,
-		ConvRepo:    convRepo,
-		AuthService: authService,
-		AuthHandler: authHandler,
-		UserHandler: userHandler,
-		ConvHandler: convHandler,
-		WSHandler:   wsHandler,
-		StaticDir:   staticDir,
-		Logger:      logger,
+		DB:             db,
+		UserRepo:       userRepo,
+		ConvRepo:       convRepo,
+		AttachmentRepo: attachmentRepo,
+		R2Storage:      r2Storage,
+		AuthService:    authService,
+		AuthHandler:    authHandler,
+		UserHandler:    userHandler,
+		ConvHandler:    convHandler,
+		UploadHandler:  uploadHandler,
+		WSHandler:      wsHandler,
+		StaticDir:      staticDir,
+		Logger:         logger,
 	}
 
 	srv := server.New(cfg, deps)
