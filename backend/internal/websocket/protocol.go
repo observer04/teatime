@@ -105,15 +105,15 @@ type AuthSuccessPayload struct {
 
 // MessageNewPayload broadcasts a new message to room members
 type MessageNewPayload struct {
-	ID             uuid.UUID  `json:"id"`
-	ConversationID uuid.UUID  `json:"conversation_id"`
-	SenderID       uuid.UUID  `json:"sender_id"`
-	SenderUsername string     `json:"sender_username"`
-	BodyText       string     `json:"body_text"`
-	AttachmentID   *uuid.UUID `json:"attachment_id,omitempty"`
+	ID             uuid.UUID          `json:"id"`
+	ConversationID uuid.UUID          `json:"conversation_id"`
+	SenderID       uuid.UUID          `json:"sender_id"`
+	SenderUsername string             `json:"sender_username"`
+	BodyText       string             `json:"body_text"`
+	AttachmentID   *uuid.UUID         `json:"attachment_id,omitempty"`
 	Attachment     *AttachmentPayload `json:"attachment,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	TempID         string     `json:"temp_id,omitempty"` // Echo back for sender
+	CreatedAt      time.Time          `json:"created_at"`
+	TempID         string             `json:"temp_id,omitempty"` // Echo back for sender
 }
 
 // AttachmentPayload contains attachment details
