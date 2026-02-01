@@ -5,10 +5,29 @@ import { GlassChatHeader } from './GlassChatHeader';
 import { GlassChatMessages } from './GlassChatMessages';
 import { GlassMessageInput } from './GlassMessageInput';
 import { NewGroupModal } from './NewGroupModal';
+import { NewChatModal } from './NewChatModal';
 import { StarredMessagesModal } from './StarredMessagesModal';
 import { SearchModal } from './SearchModal';
+import { MembersPanel } from './MembersPanel';
+import VideoCallModal from './VideoCallModal';
+import { CallsTab } from './CallsTab';
+import { IncomingCallModal } from './IncomingCallModal';
 import api from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebRTC } from '../hooks/useWebRTC';
+
+// Custom hook for detecting mobile viewport
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < breakpoint);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < breakpoint);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [breakpoint]);
+
+  return isMobile;
+}
 
 export default function GlassmorphismChatLayout({ user, token, onLogout }) {
   const [activeTab, setActiveTab] = useState("chats");
@@ -16,8 +35,13 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showNewGroupModal, setShowNewGroupModal] = useState(false);
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showStarredModal, setShowStarredModal] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
+  const [showMembersPanel, setShowMembersPanel] = useState(false);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+  
+  const isMobile = useIsMobile();
 
   const {
     isConnected,
@@ -26,6 +50,26 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     sendMessage,
     joinRoom,
   } = useWebSocket(token);
+
+  // WebRTC video call hook
+  const {
+    isInCall,
+    callState,
+    localStream,
+    remoteStreams,
+    isMuted,
+    isVideoOff,
+    participants,
+    incomingCall,
+    joinCall,
+    leaveCall,
+    toggleMute,
+    toggleVideo,
+    acceptCall,
+    declineCall
+  } = useWebRTC(user.id);
+
+  const [showVideoCall, setShowVideoCall] = useState(false);
 
   useEffect(() => {
     loadConversations();
@@ -48,11 +92,18 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
       setCurrentConversation(conversation);
       joinRoom(conversation.id);
       
+      // Show chat on mobile
+      if (isMobile) {
+        setShowMobileChat(true);
+      }
+      
       try {
         const data = await api.getMessages(conversation.id);
+        // Reverse messages so oldest are first (API returns DESC order)
+        const orderedMessages = (data.messages || []).reverse();
         setMessages(prev => ({
           ...prev,
-          [conversation.id]: data.messages || []
+          [conversation.id]: orderedMessages
         }));
       } catch (error) {
         console.error('Failed to load messages:', error);
@@ -72,6 +123,21 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
 
   const handleNewGroup = () => {
     setShowNewGroupModal(true);
+  };
+
+  const handleNewChat = () => {
+    setShowNewChatModal(true);
+  };
+
+  const handleChatStarted = (conversation) => {
+    // Check if conversation already exists in list
+    const existing = conversations.find(c => c.id === conversation.id);
+    if (!existing) {
+      setConversations(prev => [conversation, ...prev]);
+    }
+    setCurrentConversation(conversation);
+    joinRoom(conversation.id);
+    setShowNewChatModal(false);
   };
 
   const handleGroupCreated = (conversation) => {
@@ -109,6 +175,33 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     }
   };
 
+  // Start a video call in the current conversation
+  const handleStartVideoCall = async () => {
+    if (!currentConversation) return;
+    try {
+      await joinCall(currentConversation.id, true);
+      setShowVideoCall(true);
+    } catch (error) {
+      console.error('Failed to start video call:', error);
+    }
+  };
+
+  // Start an audio call in the current conversation
+  const handleStartAudioCall = async () => {
+    if (!currentConversation) return;
+    try {
+      await joinCall(currentConversation.id, false); // false = audio only
+      setShowVideoCall(true); // Reuse the same modal, video will be off by default
+    } catch (error) {
+      console.error('Failed to start audio call:', error);
+    }
+  };
+
+  const handleEndVideoCall = () => {
+    leaveCall();
+    setShowVideoCall(false);
+  };
+
   // Get messages for current conversation
   const currentMessages = currentConversation?.id 
     ? (messages[currentConversation.id] || [])
@@ -125,7 +218,7 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     content: msg.body_text || msg.content,
     timestamp: new Date(msg.created_at),
     isOwn: (msg.user_id || msg.sender_id) === user.id,
-    isRead: true,
+    receiptStatus: msg.receipt_status || 'sent', // "sent", "delivered", "read"
     attachment: msg.attachment ? {
       id: msg.attachment.id,
       mime_type: msg.attachment.mime_type,
@@ -139,7 +232,7 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
         name: currentConversation.type === 'group' 
           ? currentConversation.title 
           : (currentConversation.other_user?.username || 'Unknown'),
-        status: isConnected ? "online" : "offline",
+        status: null, // Don't show misleading online status - we don't track real presence yet
         avatar: currentConversation.type === 'group' 
           ? currentConversation.avatar_url 
           : currentConversation.other_user?.avatar_url,
@@ -148,37 +241,78 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
       }
     : null;
 
+  const handleMobileBack = () => {
+    setShowMobileChat(false);
+  };
+
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      {/* Left Icon Sidebar */}
-      <IconSidebar 
-        activeTab={activeTab} 
-        onTabChange={setActiveTab}
-        currentUser={user}
-        onOpenStarred={() => setShowStarredModal(true)}
-        onOpenSearch={() => setShowSearchModal(true)}
-      />
+      {/* Left Icon Sidebar - Hidden on mobile when chat is open */}
+      <div className={`${isMobile && showMobileChat ? 'hidden' : 'flex'}`}>
+        <IconSidebar 
+          activeTab={activeTab} 
+          onTabChange={setActiveTab}
+          currentUser={user}
+          onOpenStarred={() => setShowStarredModal(true)}
+          onOpenSearch={() => setShowSearchModal(true)}
+        />
+      </div>
 
-      {/* Chat List Panel */}
-      <GlassChatSidebar 
-        activeChat={currentConversation?.id || ''} 
-        onChatSelect={handleChatSelect}
-        conversations={conversations}
-        onLogout={onLogout}
-        onNewGroup={handleNewGroup}
-        onOpenStarred={() => setShowStarredModal(true)}
-        onMarkAllRead={handleMarkAllRead}
-      />
+      {/* Chat List Panel / Calls Tab - Hidden on mobile when chat is open */}
+      <div className={`${isMobile && showMobileChat ? 'hidden' : 'flex'} ${isMobile ? 'flex-1' : ''}`}>
+        {activeTab === 'calls' ? (
+          <div className="w-80 border-r border-border">
+            <CallsTab
+              currentUserId={user.id}
+              onStartCall={(conversationId, callType) => {
+                // Find the conversation and start a call
+                const conv = conversations.find(c => c.id === conversationId);
+                if (conv) {
+                  setCurrentConversation(conv);
+                  handleStartVideoCall();
+                }
+              }}
+            />
+          </div>
+        ) : (
+          <GlassChatSidebar 
+            activeChat={currentConversation?.id || ''} 
+            onChatSelect={handleChatSelect}
+            conversations={conversations}
+            onLogout={onLogout}
+            onNewGroup={handleNewGroup}
+            onNewChat={handleNewChat}
+            onOpenStarred={() => setShowStarredModal(true)}
+            onMarkAllRead={handleMarkAllRead}
+            isMobile={isMobile}
+          />
+        )}
+      </div>
 
-      {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col min-w-0">
+      {/* Main Chat Area - Full screen on mobile when chat is open */}
+      <main className={`flex-1 flex flex-col min-w-0 ${isMobile && !showMobileChat ? 'hidden' : ''}`}>
         {currentChat ? (
           <>
             <GlassChatHeader 
               {...currentChat} 
               onSearch={() => setShowSearchModal(true)}
+              onBack={isMobile ? handleMobileBack : undefined}
+              onMembersClick={() => setShowMembersPanel(true)}
+              onVideoCall={handleStartVideoCall}
+              onAudioCall={handleStartAudioCall}
             />
-            <GlassChatMessages messages={transformedMessages} />
+            <GlassChatMessages 
+              messages={transformedMessages}
+              onMessageDeleted={(msg) => {
+                // Remove deleted message from local state
+                if (currentConversation) {
+                  setMessages(prev => ({
+                    ...prev,
+                    [currentConversation.id]: (prev[currentConversation.id] || []).filter(m => m.id !== msg.id)
+                  }));
+                }
+              }}
+            />
             <GlassMessageInput 
               conversationId={currentConversation.id}
               onSend={handleSendMessage} 
@@ -203,6 +337,13 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
         onGroupCreated={handleGroupCreated}
       />
 
+      <NewChatModal
+        isOpen={showNewChatModal}
+        onClose={() => setShowNewChatModal(false)}
+        onChatStarted={handleChatStarted}
+        currentUserId={user.id}
+      />
+
       <StarredMessagesModal
         isOpen={showStarredModal}
         onClose={() => setShowStarredModal(false)}
@@ -214,6 +355,68 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
         onClose={() => setShowSearchModal(false)}
         conversationId={currentConversation?.id}
         onMessageClick={handleSearchMessageClick}
+      />
+
+      <MembersPanel
+        isOpen={showMembersPanel}
+        onClose={() => setShowMembersPanel(false)}
+        conversation={currentConversation}
+        currentUserId={user.id}
+        onMemberAdded={(member) => {
+          // Update member count in current conversation
+          if (currentConversation) {
+            setCurrentConversation(prev => ({
+              ...prev,
+              member_count: (prev.member_count || 0) + 1
+            }));
+          }
+        }}
+        onMemberRemoved={(member) => {
+          if (member.left) {
+            // User left the group - navigate away
+            setCurrentConversation(null);
+            setShowMobileChat(false);
+            loadConversations();
+          } else {
+            // Someone was removed - update count
+            if (currentConversation) {
+              setCurrentConversation(prev => ({
+                ...prev,
+                member_count: Math.max((prev.member_count || 1) - 1, 1)
+              }));
+            }
+          }
+        }}
+      />
+
+      {/* Video Call Modal */}
+      <VideoCallModal
+        isOpen={showVideoCall || isInCall}
+        onClose={handleEndVideoCall}
+        conversationName={currentChat?.name || 'Video Call'}
+        localStream={localStream}
+        remoteStreams={remoteStreams}
+        isMuted={isMuted}
+        isVideoOff={isVideoOff}
+        onToggleMute={toggleMute}
+        onToggleVideo={toggleVideo}
+        onEndCall={handleEndVideoCall}
+        participants={participants}
+        callState={callState}
+      />
+
+      {/* Incoming Call Modal */}
+      <IncomingCallModal
+        isOpen={!!incomingCall}
+        caller={incomingCall?.caller}
+        callType={incomingCall?.callType}
+        isGroup={incomingCall?.isGroup}
+        conversationName={incomingCall?.conversationName}
+        onAccept={(withVideo) => {
+          acceptCall(withVideo);
+          setShowVideoCall(true);
+        }}
+        onDecline={declineCall}
       />
     </div>
   )

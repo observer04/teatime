@@ -59,8 +59,9 @@ type Message struct {
 	CreatedAt      time.Time  `json:"created_at"`
 
 	// Populated on fetch
-	Sender     *PublicUser `json:"sender,omitempty"`
-	Attachment *Attachment `json:"attachment,omitempty"`
+	Sender        *PublicUser `json:"sender,omitempty"`
+	Attachment    *Attachment `json:"attachment,omitempty"`
+	ReceiptStatus string      `json:"receipt_status,omitempty"` // "sent", "delivered", "read"
 }
 
 // MessageReceipt tracks delivered/read status per user

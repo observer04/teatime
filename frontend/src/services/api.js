@@ -168,6 +168,12 @@ class ApiService {
     });
   }
 
+  async deleteMessage(messageId) {
+    return this.request(`/messages/${messageId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async getStarredMessages(limit = 50) {
     return this.request(`/messages/starred?limit=${limit}`);
   }
@@ -192,6 +198,36 @@ class ApiService {
   async markAllConversationsRead() {
     return this.request('/conversations/mark-all-read', {
       method: 'POST',
+    });
+  }
+
+  // =========================================================================
+  // Call History
+  // =========================================================================
+  
+  async getCallHistory(limit = 50, offset = 0) {
+    return this.request(`/calls?limit=${limit}&offset=${offset}`);
+  }
+
+  async getCall(callId) {
+    return this.request(`/calls/${callId}`);
+  }
+
+  async getMissedCallCount() {
+    return this.request('/calls/missed/count');
+  }
+
+  async createCall(conversationId, callType = 'video') {
+    return this.request('/calls', {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId, call_type: callType }),
+    });
+  }
+
+  async updateCall(callId, status) {
+    return this.request(`/calls/${callId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
     });
   }
 }

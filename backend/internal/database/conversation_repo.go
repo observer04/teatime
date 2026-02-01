@@ -729,3 +729,201 @@ func (r *ConversationRepository) GetMessageByID(ctx context.Context, messageID u
 	m.SenderID = senderID
 	return &m, nil
 }
+
+// DeleteMessage deletes a message by ID (soft delete by setting deleted_at if needed, or hard delete for MVP)
+func (r *ConversationRepository) DeleteMessage(ctx context.Context, messageID uuid.UUID) error {
+	result, err := r.db.Pool.Exec(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrMessageNotFound
+	}
+	return nil
+}
+
+// =============================================================================
+// Message Receipts
+// =============================================================================
+
+// MarkMessageDelivered marks a message as delivered to a user
+func (r *ConversationRepository) MarkMessageDelivered(ctx context.Context, messageID, userID uuid.UUID) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		INSERT INTO message_receipts (message_id, user_id, delivered_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (message_id, user_id) 
+		DO UPDATE SET delivered_at = COALESCE(message_receipts.delivered_at, NOW())
+	`, messageID, userID)
+	return err
+}
+
+// MarkMessageRead marks a message as read by a user
+func (r *ConversationRepository) MarkMessageRead(ctx context.Context, messageID, userID uuid.UUID) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		INSERT INTO message_receipts (message_id, user_id, delivered_at, read_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (message_id, user_id) 
+		DO UPDATE SET 
+			delivered_at = COALESCE(message_receipts.delivered_at, NOW()),
+			read_at = COALESCE(message_receipts.read_at, NOW())
+	`, messageID, userID)
+	return err
+}
+
+// MarkConversationMessagesDelivered marks all undelivered messages in a conversation as delivered for a user
+func (r *ConversationRepository) MarkConversationMessagesDelivered(ctx context.Context, conversationID, userID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		WITH messages_to_mark AS (
+			SELECT m.id FROM messages m
+			LEFT JOIN message_receipts mr ON mr.message_id = m.id AND mr.user_id = $2
+			WHERE m.conversation_id = $1
+			  AND m.sender_id != $2
+			  AND mr.delivered_at IS NULL
+		),
+		inserted AS (
+			INSERT INTO message_receipts (message_id, user_id, delivered_at)
+			SELECT id, $2, NOW() FROM messages_to_mark
+			ON CONFLICT (message_id, user_id) 
+			DO UPDATE SET delivered_at = COALESCE(message_receipts.delivered_at, NOW())
+			RETURNING message_id
+		)
+		SELECT message_id FROM inserted
+	`, conversationID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messageIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		messageIDs = append(messageIDs, id)
+	}
+	return messageIDs, rows.Err()
+}
+
+// MarkConversationMessagesRead marks all unread messages in a conversation as read for a user
+func (r *ConversationRepository) MarkConversationMessagesRead(ctx context.Context, conversationID, userID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		WITH messages_to_mark AS (
+			SELECT m.id FROM messages m
+			LEFT JOIN message_receipts mr ON mr.message_id = m.id AND mr.user_id = $2
+			WHERE m.conversation_id = $1
+			  AND m.sender_id != $2
+			  AND mr.read_at IS NULL
+		),
+		inserted AS (
+			INSERT INTO message_receipts (message_id, user_id, delivered_at, read_at)
+			SELECT id, $2, NOW(), NOW() FROM messages_to_mark
+			ON CONFLICT (message_id, user_id) 
+			DO UPDATE SET 
+				delivered_at = COALESCE(message_receipts.delivered_at, NOW()),
+				read_at = COALESCE(message_receipts.read_at, NOW())
+			RETURNING message_id
+		)
+		SELECT message_id FROM inserted
+	`, conversationID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messageIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		messageIDs = append(messageIDs, id)
+	}
+	return messageIDs, rows.Err()
+}
+
+// GetMessageReceipts retrieves all receipts for a message
+func (r *ConversationRepository) GetMessageReceipts(ctx context.Context, messageID uuid.UUID) ([]domain.MessageReceipt, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT message_id, user_id, delivered_at, read_at
+		FROM message_receipts
+		WHERE message_id = $1
+	`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var receipts []domain.MessageReceipt
+	for rows.Next() {
+		var r domain.MessageReceipt
+		if err := rows.Scan(&r.MessageID, &r.UserID, &r.DeliveredAt, &r.ReadAt); err != nil {
+			return nil, err
+		}
+		receipts = append(receipts, r)
+	}
+	return receipts, rows.Err()
+}
+
+// GetMessageReceiptStatus calculates the aggregate receipt status for a message
+// Returns: "sent" (no receipts), "delivered" (at least one delivered), "read" (at least one read)
+func (r *ConversationRepository) GetMessageReceiptStatus(ctx context.Context, messageID uuid.UUID) (string, error) {
+	var deliveredCount, readCount int
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT 
+			COUNT(*) FILTER (WHERE delivered_at IS NOT NULL) as delivered_count,
+			COUNT(*) FILTER (WHERE read_at IS NOT NULL) as read_count
+		FROM message_receipts
+		WHERE message_id = $1
+	`, messageID).Scan(&deliveredCount, &readCount)
+	if err != nil {
+		return "sent", err
+	}
+
+	if readCount > 0 {
+		return "read", nil
+	}
+	if deliveredCount > 0 {
+		return "delivered", nil
+	}
+	return "sent", nil
+}
+
+// GetMessageReceiptStatuses returns receipt status for multiple messages at once
+func (r *ConversationRepository) GetMessageReceiptStatuses(ctx context.Context, messageIDs []uuid.UUID) (map[uuid.UUID]string, error) {
+	if len(messageIDs) == 0 {
+		return make(map[uuid.UUID]string), nil
+	}
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT 
+			m.id,
+			COUNT(mr.delivered_at) as delivered_count,
+			COUNT(mr.read_at) as read_count
+		FROM unnest($1::uuid[]) AS m(id)
+		LEFT JOIN message_receipts mr ON mr.message_id = m.id
+		GROUP BY m.id
+	`, messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID]string)
+	for rows.Next() {
+		var id uuid.UUID
+		var deliveredCount, readCount int
+		if err := rows.Scan(&id, &deliveredCount, &readCount); err != nil {
+			return nil, err
+		}
+
+		if readCount > 0 {
+			result[id] = "read"
+		} else if deliveredCount > 0 {
+			result[id] = "delivered"
+		} else {
+			result[id] = "sent"
+		}
+	}
+	return result, rows.Err()
+}

@@ -20,8 +20,8 @@ export function IconSidebar({ activeTab, onTabChange, currentUser, onOpenStarred
   ]
 
   return (
-    <aside className="w-16 h-full flex flex-col items-center py-4 bg-card border-r border-border">
-      <nav className="flex flex-col items-center gap-2 flex-1">
+    <aside className="w-14 md:w-16 h-full flex flex-col items-center py-2 md:py-4 bg-card border-r border-border">
+      <nav className="flex flex-col items-center gap-1 md:gap-2 flex-1">
         {navItems.map(({ id, icon: Icon, label, badge }) => (
           <button
             key={id}

@@ -57,6 +57,7 @@ type Participant struct {
 // Room represents an active video call
 type Room struct {
 	ID           uuid.UUID `json:"id"` // Same as conversation ID
+	CallID       uuid.UUID `json:"call_id"` // Reference to call_logs entry
 	Participants map[uuid.UUID]*Participant
 	mu           sync.RWMutex
 	createdAt    int64
@@ -68,6 +69,20 @@ func NewRoom(id uuid.UUID) *Room {
 		ID:           id,
 		Participants: make(map[uuid.UUID]*Participant),
 	}
+}
+
+// SetCallID sets the database call log ID
+func (r *Room) SetCallID(callID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.CallID = callID
+}
+
+// GetCallID returns the database call log ID
+func (r *Room) GetCallID() uuid.UUID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.CallID
 }
 
 // AddParticipant adds a user to the room
@@ -159,9 +174,13 @@ func (m *Manager) DeleteRoom(roomID uuid.UUID) {
 // JoinCall adds a user to a call and notifies other participants
 func (m *Manager) JoinCall(ctx context.Context, roomID, userID uuid.UUID, username string) (*Room, error) {
 	room := m.GetOrCreateRoom(roomID)
+	
+	// Get existing participants before adding the new one
+	existingParticipants := room.GetParticipants()
+	
 	room.AddParticipant(userID, username)
 
-	// Notify other participants via pubsub
+	// Notify other participants via pubsub (send to each user's topic)
 	event := CallParticipantEvent{
 		RoomID:   roomID,
 		UserID:   userID,
@@ -170,12 +189,19 @@ func (m *Manager) JoinCall(ctx context.Context, roomID, userID uuid.UUID, userna
 	}
 
 	payloadBytes, _ := json.Marshal(event)
-	msg := &pubsub.Message{
-		Topic:   pubsub.Topics.Call(roomID.String()),
-		Type:    EventTypeCallParticipantJoined,
-		Payload: payloadBytes,
+	
+	// Send to each existing participant's user topic
+	for _, p := range existingParticipants {
+		if p.UserID == userID {
+			continue // Skip the user who just joined
+		}
+		msg := &pubsub.Message{
+			Topic:   pubsub.Topics.User(p.UserID.String()),
+			Type:    EventTypeCallParticipantJoined,
+			Payload: payloadBytes,
+		}
+		m.pubsub.Publish(ctx, msg.Topic, msg)
 	}
-	m.pubsub.Publish(ctx, msg.Topic, msg)
 
 	m.logger.Info("user joined call", "room_id", roomID, "user_id", userID)
 	return room, nil
@@ -188,9 +214,12 @@ func (m *Manager) LeaveCall(ctx context.Context, roomID, userID uuid.UUID, usern
 		return
 	}
 
+	// Get remaining participants before removing this user
+	remainingParticipants := room.GetParticipants()
+	
 	room.RemoveParticipant(userID)
 
-	// Notify via pubsub
+	// Notify remaining participants via pubsub (send to each user's topic)
 	event := CallParticipantEvent{
 		RoomID:   roomID,
 		UserID:   userID,
@@ -199,12 +228,19 @@ func (m *Manager) LeaveCall(ctx context.Context, roomID, userID uuid.UUID, usern
 	}
 
 	payloadBytes, _ := json.Marshal(event)
-	msg := &pubsub.Message{
-		Topic:   pubsub.Topics.Call(roomID.String()),
-		Type:    EventTypeCallParticipantLeft,
-		Payload: payloadBytes,
+	
+	// Send to each remaining participant's user topic
+	for _, p := range remainingParticipants {
+		if p.UserID == userID {
+			continue // Skip the user who is leaving
+		}
+		msg := &pubsub.Message{
+			Topic:   pubsub.Topics.User(p.UserID.String()),
+			Type:    EventTypeCallParticipantLeft,
+			Payload: payloadBytes,
+		}
+		m.pubsub.Publish(ctx, msg.Topic, msg)
 	}
-	m.pubsub.Publish(ctx, msg.Topic, msg)
 
 	// Clean up empty rooms
 	if room.ParticipantCount() == 0 {

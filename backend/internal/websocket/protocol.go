@@ -20,14 +20,16 @@ const (
 
 // Event types for server -> client
 const (
-	EventTypeError         = "error"
-	EventTypeAuthSuccess   = "auth.success"
-	EventTypeMessageNew    = "message.new"
-	EventTypeTyping        = "typing"
-	EventTypeReceiptUpdate = "receipt.updated"
-	EventTypeMemberJoined  = "room.member_joined"
-	EventTypeMemberLeft    = "room.member_left"
-	EventTypePresence      = "presence"
+	EventTypeError          = "error"
+	EventTypeAuthSuccess    = "auth.success"
+	EventTypeMessageNew     = "message.new"
+	EventTypeMessageDeleted = "message.deleted"
+	EventTypeTyping         = "typing"
+	EventTypeReceiptUpdate  = "receipt.updated"
+	EventTypeMemberJoined   = "room.member_joined"
+	EventTypeMemberLeft     = "room.member_left"
+	EventTypeRoomUpdated    = "room.updated"
+	EventTypePresence       = "presence"
 )
 
 // Message is the base WebSocket message envelope
@@ -137,4 +139,53 @@ type PresencePayload struct {
 	UserID   uuid.UUID `json:"user_id"`
 	Username string    `json:"username"`
 	Online   bool      `json:"online"`
+}
+
+// MemberJoinedPayload broadcasts when a new member is added to a group
+type MemberJoinedPayload struct {
+	ConversationID uuid.UUID `json:"conversation_id"`
+	UserID         uuid.UUID `json:"user_id"`
+	Username       string    `json:"username"`
+	Role           string    `json:"role"`
+	AddedBy        uuid.UUID `json:"added_by"`
+}
+
+// MemberLeftPayload broadcasts when a member leaves or is removed from a group
+type MemberLeftPayload struct {
+	ConversationID uuid.UUID `json:"conversation_id"`
+	UserID         uuid.UUID `json:"user_id"`
+	Username       string    `json:"username"`
+	RemovedBy      uuid.UUID `json:"removed_by"` // Same as UserID if self-left
+}
+
+// RoomUpdatedPayload broadcasts when a conversation is updated (e.g., title change)
+type RoomUpdatedPayload struct {
+	ConversationID uuid.UUID `json:"conversation_id"`
+	Title          string    `json:"title,omitempty"`
+	UpdatedBy      uuid.UUID `json:"updated_by"`
+}
+
+// MessageDeletedPayload broadcasts when a message is deleted
+type MessageDeletedPayload struct {
+	MessageID      uuid.UUID `json:"message_id"`
+	ConversationID uuid.UUID `json:"conversation_id"`
+	DeletedBy      uuid.UUID `json:"deleted_by"`
+}
+
+// ReceiptUpdatePayload broadcasts when message receipts are updated
+type ReceiptUpdatePayload struct {
+	MessageID      uuid.UUID  `json:"message_id"`
+	ConversationID uuid.UUID  `json:"conversation_id"`
+	UserID         uuid.UUID  `json:"user_id"`      // Who delivered/read the message
+	Status         string     `json:"status"`       // "delivered" or "read"
+	Timestamp      time.Time  `json:"timestamp"`    // When it was delivered/read
+}
+
+// ReceiptBatchUpdatePayload for multiple receipt updates at once
+type ReceiptBatchUpdatePayload struct {
+	ConversationID uuid.UUID   `json:"conversation_id"`
+	MessageIDs     []uuid.UUID `json:"message_ids"`
+	UserID         uuid.UUID   `json:"user_id"`
+	Status         string      `json:"status"`    // "delivered" or "read"
+	Timestamp      time.Time   `json:"timestamp"`
 }

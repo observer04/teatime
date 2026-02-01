@@ -22,12 +22,14 @@ type Dependencies struct {
 	DB             *database.DB
 	UserRepo       *database.UserRepository
 	ConvRepo       *database.ConversationRepository
+	CallRepo       *database.CallRepository
 	AttachmentRepo *database.AttachmentRepository
 	R2Storage      *storage.R2Storage
 	AuthService    *auth.Service
 	AuthHandler    *api.AuthHandler
 	UserHandler    *api.UserHandler
 	ConvHandler    *api.ConversationHandler
+	CallHandler    *api.CallHandler
 	UploadHandler  *api.UploadHandler
 	WSHandler      *websocket.Handler
 	StaticDir      string
@@ -134,12 +136,24 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 	mux.Handle("GET /messages/search", authMiddleware(http.HandlerFunc(deps.ConvHandler.SearchAllMessages)))
 	mux.Handle("POST /messages/{id}/star", authMiddleware(http.HandlerFunc(deps.ConvHandler.StarMessage)))
 	mux.Handle("DELETE /messages/{id}/star", authMiddleware(http.HandlerFunc(deps.ConvHandler.UnstarMessage)))
+	mux.Handle("DELETE /messages/{id}", authMiddleware(http.HandlerFunc(deps.ConvHandler.DeleteMessage)))
 
 	// =========================================================================
 	// Block routes
 	// =========================================================================
 	mux.Handle("POST /blocks/{username}", authMiddleware(http.HandlerFunc(deps.ConvHandler.BlockUser)))
 	mux.Handle("DELETE /blocks/{username}", authMiddleware(http.HandlerFunc(deps.ConvHandler.UnblockUser)))
+
+	// =========================================================================
+	// Call routes (call history)
+	// =========================================================================
+	if deps.CallHandler != nil {
+		mux.Handle("GET /calls", authMiddleware(http.HandlerFunc(deps.CallHandler.GetCallHistory)))
+		mux.Handle("GET /calls/missed/count", authMiddleware(http.HandlerFunc(deps.CallHandler.GetMissedCallCount)))
+		mux.Handle("GET /calls/{id}", authMiddleware(http.HandlerFunc(deps.CallHandler.GetCall)))
+		mux.Handle("POST /calls", authMiddleware(http.HandlerFunc(deps.CallHandler.CreateCall)))
+		mux.Handle("PATCH /calls/{id}", authMiddleware(http.HandlerFunc(deps.CallHandler.UpdateCall)))
+	}
 
 	// =========================================================================
 	// Upload routes (file attachments)

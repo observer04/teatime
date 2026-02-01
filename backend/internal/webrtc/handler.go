@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/observer/teatime/internal/database"
+	"github.com/observer/teatime/internal/domain"
 	"github.com/observer/teatime/internal/pubsub"
 )
 
@@ -14,15 +15,17 @@ import (
 type CallHandler struct {
 	manager  *Manager
 	convRepo *database.ConversationRepository
+	callRepo *database.CallRepository
 	pubsub   pubsub.PubSub
 	logger   *slog.Logger
 }
 
 // NewCallHandler creates a new call handler
-func NewCallHandler(mgr *Manager, convRepo *database.ConversationRepository, ps pubsub.PubSub, logger *slog.Logger) *CallHandler {
+func NewCallHandler(mgr *Manager, convRepo *database.ConversationRepository, callRepo *database.CallRepository, ps pubsub.PubSub, logger *slog.Logger) *CallHandler {
 	return &CallHandler{
 		manager:  mgr,
 		convRepo: convRepo,
+		callRepo: callRepo,
 		pubsub:   ps,
 		logger:   logger,
 	}
@@ -52,10 +55,43 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		return nil, &CallError{Code: "not_member", Message: "Not a member of this conversation"}
 	}
 
+	// Check if this is a new call or joining existing
+	room := h.manager.GetRoom(roomID)
+	isNewCall := room == nil || room.ParticipantCount() == 0
+
 	// Join the call
-	room, err := h.manager.JoinCall(ctx, roomID, sigCtx.UserID, sigCtx.Username)
+	room, err = h.manager.JoinCall(ctx, roomID, sigCtx.UserID, sigCtx.Username)
 	if err != nil {
 		return nil, &CallError{Code: "join_failed", Message: err.Error()}
+	}
+
+	// If this is a new call, create call log and notify other members
+	if isNewCall && h.callRepo != nil {
+		// Determine call type from payload (default to video)
+		callType := database.CallTypeVideo
+		
+		// Create call log
+		callLog, err := h.callRepo.CreateCallLog(ctx, roomID, sigCtx.UserID, callType)
+		if err != nil {
+			h.logger.Error("failed to create call log", "error", err)
+		} else {
+			// Add initiator as participant
+			h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
+			
+			// Store call ID in room for later reference
+			room.SetCallID(callLog.ID)
+			
+			// Notify other conversation members about incoming call
+			h.broadcastIncomingCall(ctx, roomID, callLog.ID, sigCtx, callType)
+		}
+	} else if room.GetCallID() != uuid.Nil && h.callRepo != nil {
+		// Joining existing call - add as participant and start call if needed
+		h.callRepo.AddParticipant(ctx, room.GetCallID(), sigCtx.UserID)
+		
+		// If this is the second person, start the call
+		if room.ParticipantCount() == 2 {
+			h.callRepo.StartCall(ctx, room.GetCallID())
+		}
 	}
 
 	// Return config with ICE servers and current participants
@@ -64,6 +100,64 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		ICEServers:   h.manager.GetConfig().GetICEServers(),
 		Participants: room.GetParticipants(),
 	}, nil
+}
+
+// broadcastIncomingCall notifies other conversation members about an incoming call
+func (h *CallHandler) broadcastIncomingCall(ctx context.Context, conversationID, callID uuid.UUID, caller *SignalingContext, callType database.CallType) {
+	// Get conversation details (includes members)
+	conv, err := h.convRepo.GetByID(ctx, conversationID)
+	if err != nil {
+		h.logger.Error("failed to get conversation for call notification", "error", err)
+		return
+	}
+
+	h.logger.Info("broadcasting incoming call", 
+		"conversation_id", conversationID,
+		"call_id", callID,
+		"caller_id", caller.UserID,
+		"caller_name", caller.Username,
+		"member_count", len(conv.Members),
+		"conv_type", conv.Type)
+
+	incomingPayload := CallIncomingPayload{
+		CallID:           callID,
+		ConversationID:   conversationID,
+		CallerID:         caller.UserID,
+		CallerName:       caller.Username,
+		CallType:         string(callType),
+		IsGroup:          conv.Type == domain.ConversationTypeGroup,
+		ConversationName: conv.Title,
+	}
+
+	payloadBytes, _ := json.Marshal(incomingPayload)
+
+	// Notify all members except the caller
+	for _, member := range conv.Members {
+		h.logger.Debug("checking member for notification", 
+			"member_id", member.UserID, 
+			"caller_id", caller.UserID,
+			"is_caller", member.UserID == caller.UserID)
+			
+		if member.UserID == caller.UserID {
+			continue
+		}
+
+		topic := pubsub.Topics.User(member.UserID.String())
+		h.logger.Info("sending call.incoming to user", 
+			"user_id", member.UserID, 
+			"topic", topic)
+
+		msg := &pubsub.Message{
+			Topic:   topic,
+			Type:    EventTypeCallIncoming,
+			Payload: payloadBytes,
+		}
+		if err := h.pubsub.Publish(ctx, msg.Topic, msg); err != nil {
+			h.logger.Error("failed to send incoming call notification", "user_id", member.UserID, "error", err)
+		} else {
+			h.logger.Info("successfully published call.incoming", "user_id", member.UserID)
+		}
+	}
 }
 
 // HandleLeave processes a call.leave message
@@ -98,6 +192,8 @@ func (h *CallHandler) HandleOffer(ctx context.Context, sigCtx *SignalingContext,
 	if err != nil {
 		return &CallError{Code: "invalid_target", Message: "Invalid target ID"}
 	}
+
+	h.logger.Info("relaying offer", "from", sigCtx.UserID, "to", targetID, "room", roomID)
 
 	// Verify both users are in the call
 	room := h.manager.GetRoom(roomID)
@@ -138,6 +234,8 @@ func (h *CallHandler) HandleAnswer(ctx context.Context, sigCtx *SignalingContext
 	if err != nil {
 		return &CallError{Code: "invalid_target", Message: "Invalid target ID"}
 	}
+
+	h.logger.Info("relaying answer", "from", sigCtx.UserID, "to", targetID, "room", roomID)
 
 	// Verify room exists
 	room := h.manager.GetRoom(roomID)

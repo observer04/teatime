@@ -160,6 +160,8 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleTyping(client, msg.Payload, true)
 	case EventTypeTypingStop:
 		h.handleTyping(client, msg.Payload, false)
+	case EventTypeReceiptRead:
+		h.handleReceiptRead(client, msg.Payload)
 	// WebRTC call events
 	case webrtc.EventTypeCallJoin:
 		h.handleCallJoin(client, msg.Payload)
@@ -234,7 +236,8 @@ func (h *Hub) handleRoomJoin(client *Client, payload json.RawMessage) {
 
 	// Check if user is a member
 	ctx := context.Background()
-	isMember, err := h.convRepo.IsMember(ctx, convID, client.UserID())
+	userID := client.UserID()
+	isMember, err := h.convRepo.IsMember(ctx, convID, userID)
 	if err != nil || !isMember {
 		client.sendError("not_member", "Not a member of this conversation")
 		return
@@ -253,7 +256,23 @@ func (h *Hub) handleRoomJoin(client *Client, payload json.RawMessage) {
 	// Ensure we're subscribed to room events via PubSub
 	h.subscribeToRoom(convID)
 
-	h.logger.Debug("client joined room", "user_id", client.UserID(), "room_id", convID)
+	// Mark all undelivered messages in this conversation as delivered
+	deliveredMsgIDs, err := h.convRepo.MarkConversationMessagesDelivered(ctx, convID, userID)
+	if err != nil {
+		h.logger.Error("failed to mark messages as delivered", "error", err)
+	} else if len(deliveredMsgIDs) > 0 {
+		// Broadcast batch receipt update to the room
+		broadcastPayload := ReceiptBatchUpdatePayload{
+			ConversationID: convID,
+			MessageIDs:     deliveredMsgIDs,
+			UserID:         userID,
+			Status:         "delivered",
+			Timestamp:      time.Now(),
+		}
+		h.BroadcastToRoom(convID, EventTypeReceiptUpdate, broadcastPayload)
+	}
+
+	h.logger.Debug("client joined room", "user_id", userID, "room_id", convID)
 }
 
 func (h *Hub) handleRoomLeave(client *Client, payload json.RawMessage) {
@@ -397,6 +416,62 @@ func (h *Hub) handleTyping(client *Client, payload json.RawMessage, isTyping boo
 	}
 
 	h.BroadcastToRoomExcept(convID, client, EventTypeTyping, broadcastPayload)
+}
+
+func (h *Hub) handleReceiptRead(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		return
+	}
+
+	var p ReceiptReadPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		h.logger.Error("failed to parse receipt read payload", "error", err)
+		return
+	}
+
+	messageID, err := uuid.Parse(p.MessageID)
+	if err != nil {
+		h.logger.Error("invalid message_id in receipt read", "error", err)
+		return
+	}
+
+	ctx := context.Background()
+	userID := client.UserID()
+
+	// Get the message to find its conversation
+	msg, err := h.convRepo.GetMessageByID(ctx, messageID)
+	if err != nil {
+		h.logger.Error("failed to get message for receipt", "error", err)
+		return
+	}
+
+	// Don't mark own messages as read
+	if msg.SenderID != nil && *msg.SenderID == userID {
+		return
+	}
+
+	// Check if user is a member of the conversation
+	isMember, err := h.convRepo.IsMember(ctx, msg.ConversationID, userID)
+	if err != nil || !isMember {
+		return
+	}
+
+	// Mark the message as read
+	if err := h.convRepo.MarkMessageRead(ctx, messageID, userID); err != nil {
+		h.logger.Error("failed to mark message as read", "error", err)
+		return
+	}
+
+	// Broadcast receipt update to the room
+	broadcastPayload := ReceiptUpdatePayload{
+		MessageID:      messageID,
+		ConversationID: msg.ConversationID,
+		UserID:         userID,
+		Status:         "read",
+		Timestamp:      time.Now(),
+	}
+
+	h.BroadcastToRoom(msg.ConversationID, EventTypeReceiptUpdate, broadcastPayload)
 }
 
 // ============================================================================
@@ -639,18 +714,24 @@ func (h *Hub) deliverToRoom(roomID uuid.UUID, psMsg *pubsub.Message) {
 // subscribeUserToEvents creates PubSub subscription for user-specific events
 func (h *Hub) subscribeUserToEvents(client *Client, userID uuid.UUID) {
 	topic := pubsub.Topics.User(userID.String())
+	h.logger.Info("subscribing user to events", "user_id", userID, "topic", topic)
+	
 	sub, err := h.pubsub.Subscribe(context.Background(), topic, func(ctx context.Context, msg *pubsub.Message) {
+		h.logger.Info("received pubsub message for user", "user_id", userID, "type", msg.Type, "topic", msg.Topic)
 		wsMsg := &Message{
 			Type:      msg.Type,
 			Payload:   msg.Payload,
 			Timestamp: time.Now(),
 		}
 		client.Send(wsMsg)
+		h.logger.Info("sent message to client", "user_id", userID, "type", msg.Type)
 	})
 	if err != nil {
 		h.logger.Error("failed to subscribe user to events", "user_id", userID, "error", err)
 		return
 	}
+
+	h.logger.Info("successfully subscribed user to events", "user_id", userID, "topic", topic)
 
 	// Store subscription on client for cleanup (we'll add this tracking)
 	client.mu.Lock()

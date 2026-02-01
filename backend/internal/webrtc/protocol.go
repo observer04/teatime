@@ -13,6 +13,12 @@ const (
 	EventTypeCallParticipantLeft   = "call.participant_left"
 	EventTypeCallConfig            = "call.config"
 	EventTypeCallError             = "call.error"
+	// Incoming call events
+	EventTypeCallIncoming  = "call.incoming"  // Sent to other members when someone starts a call
+	EventTypeCallAccepted  = "call.accepted"  // Sent when someone accepts the call
+	EventTypeCallDeclined  = "call.declined"  // Sent when someone declines the call
+	EventTypeCallCancelled = "call.cancelled" // Sent when caller cancels before answer
+	EventTypeCallEnded     = "call.ended"     // Sent when call ends
 )
 
 // CallJoinPayload is sent by client to join a call
@@ -65,4 +71,40 @@ type CallConfigPayload struct {
 type CallErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// CallIncomingPayload is sent to other conversation members when a call starts
+type CallIncomingPayload struct {
+	CallID           uuid.UUID `json:"call_id"`
+	ConversationID   uuid.UUID `json:"conversation_id"`
+	ConversationName string    `json:"conversation_name,omitempty"`
+	CallerID         uuid.UUID `json:"caller_id"`
+	CallerName       string    `json:"caller_name"`
+	CallerAvatar     string    `json:"caller_avatar,omitempty"`
+	CallType         string    `json:"call_type"` // "video" or "audio"
+	IsGroup          bool      `json:"is_group"`
+}
+
+// CallAcceptedPayload is sent when someone accepts the call
+type CallAcceptedPayload struct {
+	CallID uuid.UUID `json:"call_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// CallDeclinedPayload is sent when someone declines the call
+type CallDeclinedPayload struct {
+	CallID uuid.UUID `json:"call_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// CallCancelledPayload is sent when caller cancels before anyone answers
+type CallCancelledPayload struct {
+	CallID   uuid.UUID `json:"call_id"`
+	CallerID uuid.UUID `json:"caller_id"`
+}
+
+// CallEndedPayload is sent when call ends
+type CallEndedPayload struct {
+	CallID          uuid.UUID `json:"call_id"`
+	DurationSeconds int       `json:"duration_seconds"`
 }

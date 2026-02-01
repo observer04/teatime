@@ -1,9 +1,31 @@
 import { useState } from "react"
-import { MessageSquare, Search, Settings, Plus, Hash, Users, Bell, ChevronDown, LogOut } from "lucide-react"
+import { MessageSquare, Search, Settings, Hash, ChevronDown, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
-export function ChatSidebar({ activeChat, onChatSelect, conversations = [], currentUser, onLogout }) {
+interface User {
+  id: string
+  username: string
+  avatar_url?: string
+}
+
+interface Conversation {
+  id: string
+  type: 'group' | 'direct'
+  title?: string
+  other_user?: User
+  unread_count?: number
+}
+
+interface ChatSidebarProps {
+  activeChat: string
+  onChatSelect: (chatId: string) => void
+  conversations?: Conversation[]
+  currentUser?: User
+  onLogout: () => void
+}
+
+export function ChatSidebar({ activeChat, onChatSelect, conversations = [], currentUser, onLogout }: ChatSidebarProps) {
   const [channelsExpanded, setChannelsExpanded] = useState(true)
   const [dmExpanded, setDmExpanded] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
@@ -20,9 +42,9 @@ export function ChatSidebar({ activeChat, onChatSelect, conversations = [], curr
     c.other_user?.username?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const getInitials = (name) => {
+  const getInitials = (name?: string) => {
     if (!name) return '?'
-    return name.split(" ").map(n => n[0]).join("").toUpperCase()
+    return name.split(" ").map((n: string) => n[0]).join("").toUpperCase()
   }
 
   return (
@@ -89,7 +111,7 @@ export function ChatSidebar({ activeChat, onChatSelect, conversations = [], curr
                       <Hash className="w-4 h-4 flex-shrink-0" />
                       <span className="truncate">{channel.title || 'Untitled Group'}</span>
                     </div>
-                    {channel.unread_count > 0 && (
+                    {(channel.unread_count ?? 0) > 0 && (
                       <span className="px-2 py-0.5 text-xs font-medium bg-primary text-primary-foreground rounded-full flex-shrink-0">
                         {channel.unread_count}
                       </span>
@@ -137,7 +159,7 @@ export function ChatSidebar({ activeChat, onChatSelect, conversations = [], curr
                       </div>
                       <span className="truncate">{dm.other_user?.username || 'Unknown User'}</span>
                     </div>
-                    {dm.unread_count > 0 && (
+                    {(dm.unread_count ?? 0) > 0 && (
                       <span className="px-2 py-0.5 text-xs font-medium bg-primary text-primary-foreground rounded-full flex-shrink-0">
                         {dm.unread_count}
                       </span>

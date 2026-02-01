@@ -55,6 +55,7 @@ func main() {
 	// Initialize repositories
 	userRepo := database.NewUserRepository(db)
 	convRepo := database.NewConversationRepository(db)
+	callRepo := database.NewCallRepository(db)
 	attachmentRepo := database.NewAttachmentRepository(db.Pool)
 
 	// Initialize token service (use a default key for dev if not set)
@@ -78,11 +79,6 @@ func main() {
 	// Initialize auth service
 	authService := auth.NewService(userRepo, tokenService)
 
-	// Initialize handlers
-	authHandler := api.NewAuthHandler(authService, logger)
-	userHandler := api.NewUserHandler(userRepo, logger)
-	convHandler := api.NewConversationHandler(convRepo, userRepo, logger)
-
 	// Initialize R2 storage (optional - skip if not configured)
 	var r2Storage *storage.R2Storage
 	var uploadHandler *api.UploadHandler
@@ -102,6 +98,15 @@ func main() {
 	ps := pubsub.NewMemoryPubSub()
 	defer ps.Close()
 
+	// Initialize broadcaster for API handlers to send WebSocket events
+	broadcaster := websocket.NewPubSubBroadcaster(ps)
+
+	// Initialize handlers
+	authHandler := api.NewAuthHandler(authService, logger)
+	userHandler := api.NewUserHandler(userRepo, logger)
+	convHandler := api.NewConversationHandler(convRepo, userRepo, broadcaster, logger)
+	apiCallHandler := api.NewCallHandler(callRepo, convRepo, logger)
+
 	// Initialize WebRTC manager
 	webrtcConfig := &webrtc.Config{
 		STUNURLs:     cfg.ICESTUNURLs,
@@ -110,7 +115,7 @@ func main() {
 		TURNPassword: cfg.TURNPassword,
 	}
 	webrtcManager := webrtc.NewManager(webrtcConfig, ps, logger)
-	callHandler := webrtc.NewCallHandler(webrtcManager, convRepo, ps, logger)
+	callHandler := webrtc.NewCallHandler(webrtcManager, convRepo, callRepo, ps, logger)
 
 	// Initialize WebSocket hub and handler
 	wsHub := websocket.NewHub(authService, convRepo, userRepo, attachmentRepo, ps, logger)
@@ -129,12 +134,14 @@ func main() {
 		DB:             db,
 		UserRepo:       userRepo,
 		ConvRepo:       convRepo,
+		CallRepo:       callRepo,
 		AttachmentRepo: attachmentRepo,
 		R2Storage:      r2Storage,
 		AuthService:    authService,
 		AuthHandler:    authHandler,
 		UserHandler:    userHandler,
 		ConvHandler:    convHandler,
+		CallHandler:    apiCallHandler,
 		UploadHandler:  uploadHandler,
 		WSHandler:      wsHandler,
 		StaticDir:      staticDir,

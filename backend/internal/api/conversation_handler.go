@@ -13,20 +13,23 @@ import (
 	"github.com/observer/teatime/internal/auth"
 	"github.com/observer/teatime/internal/database"
 	"github.com/observer/teatime/internal/domain"
+	"github.com/observer/teatime/internal/websocket"
 )
 
 // ConversationHandler handles conversation and message endpoints
 type ConversationHandler struct {
-	convs  *database.ConversationRepository
-	users  *database.UserRepository
-	logger *slog.Logger
+	convs       *database.ConversationRepository
+	users       *database.UserRepository
+	broadcaster websocket.RoomBroadcaster
+	logger      *slog.Logger
 }
 
-func NewConversationHandler(convs *database.ConversationRepository, users *database.UserRepository, logger *slog.Logger) *ConversationHandler {
+func NewConversationHandler(convs *database.ConversationRepository, users *database.UserRepository, broadcaster websocket.RoomBroadcaster, logger *slog.Logger) *ConversationHandler {
 	return &ConversationHandler{
-		convs:  convs,
-		users:  users,
-		logger: logger,
+		convs:       convs,
+		users:       users,
+		broadcaster: broadcaster,
+		logger:      logger,
 	}
 }
 
@@ -325,6 +328,14 @@ func (h *ConversationHandler) AddMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Get new member's username for broadcast
+	newMember, err := h.users.GetByID(r.Context(), newMemberID)
+	if err == nil && h.broadcaster != nil {
+		if err := h.broadcaster.BroadcastMemberJoined(r.Context(), convID, newMemberID, newMember.Username, string(domain.MemberRoleMember), userID); err != nil {
+			h.logger.Error("failed to broadcast member joined", "error", err)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "member added"})
 }
 
@@ -359,6 +370,13 @@ func (h *ConversationHandler) RemoveMember(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Get target user's info before removal for broadcast
+	targetUser, _ := h.users.GetByID(r.Context(), targetUserID)
+	targetUsername := ""
+	if targetUser != nil {
+		targetUsername = targetUser.Username
+	}
+
 	// Check caller is member and get their role
 	callerRole, err := h.convs.GetMemberRole(r.Context(), convID, userID)
 	if err != nil {
@@ -380,6 +398,13 @@ func (h *ConversationHandler) RemoveMember(w http.ResponseWriter, r *http.Reques
 		h.logger.Error("remove member failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to remove member")
 		return
+	}
+
+	// Broadcast member removal
+	if h.broadcaster != nil {
+		if err := h.broadcaster.BroadcastMemberLeft(r.Context(), convID, targetUserID, targetUsername, userID); err != nil {
+			h.logger.Error("failed to broadcast member left", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "member removed"})
@@ -454,6 +479,13 @@ func (h *ConversationHandler) UpdateConversation(w http.ResponseWriter, r *http.
 		h.logger.Error("update conversation failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update conversation")
 		return
+	}
+
+	// Broadcast the title update
+	if h.broadcaster != nil {
+		if err := h.broadcaster.BroadcastRoomUpdated(r.Context(), convID, input.Title, userID); err != nil {
+			h.logger.Error("failed to broadcast room updated", "error", err)
+		}
 	}
 
 	// Fetch updated conversation
@@ -531,6 +563,36 @@ func (h *ConversationHandler) GetMessages(w http.ResponseWriter, r *http.Request
 
 	if messages == nil {
 		messages = []domain.Message{}
+	}
+
+	// Populate receipt statuses for messages sent by the current user
+	if len(messages) > 0 {
+		// Collect message IDs sent by this user
+		var ownMsgIDs []uuid.UUID
+		for _, msg := range messages {
+			if msg.SenderID != nil && *msg.SenderID == userID {
+				ownMsgIDs = append(ownMsgIDs, msg.ID)
+			}
+		}
+		
+		// Get receipt statuses in bulk
+		if len(ownMsgIDs) > 0 {
+			statuses, err := h.convs.GetMessageReceiptStatuses(r.Context(), ownMsgIDs)
+			if err != nil {
+				h.logger.Warn("failed to get receipt statuses", "error", err)
+			} else {
+				// Apply statuses to messages
+				for i := range messages {
+					if messages[i].SenderID != nil && *messages[i].SenderID == userID {
+						if status, ok := statuses[messages[i].ID]; ok {
+							messages[i].ReceiptStatus = status
+						} else {
+							messages[i].ReceiptStatus = "sent"
+						}
+					}
+				}
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -785,6 +847,79 @@ func (h *ConversationHandler) UnstarMessage(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "message unstarred"})
+}
+
+// DeleteMessage godoc
+//
+//	@Summary		Delete message
+//	@Description	Delete a message you sent (only the sender or group admin can delete)
+//	@Tags			messages
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Message ID"
+//	@Success		200	{object}	map[string]string
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Failure		403	{object}	map[string]string
+//	@Failure		404	{object}	map[string]string
+//	@Router			/messages/{id} [delete]
+func (h *ConversationHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	messageID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message ID")
+		return
+	}
+
+	// Get message to check ownership and conversation
+	msg, err := h.convs.GetMessageByID(r.Context(), messageID)
+	if err != nil {
+		if errors.Is(err, domain.ErrMessageNotFound) {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
+		h.logger.Error("get message failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get message")
+		return
+	}
+
+	// Check permissions: sender can delete their own message, or admin can delete any in the group
+	canDelete := false
+	if msg.SenderID != nil && *msg.SenderID == userID {
+		canDelete = true
+	} else {
+		// Check if user is admin of the conversation
+		role, err := h.convs.GetMemberRole(r.Context(), msg.ConversationID, userID)
+		if err == nil && role == domain.MemberRoleAdmin {
+			canDelete = true
+		}
+	}
+
+	if !canDelete {
+		writeError(w, http.StatusForbidden, "you can only delete your own messages")
+		return
+	}
+
+	// Delete the message
+	if err := h.convs.DeleteMessage(r.Context(), messageID); err != nil {
+		h.logger.Error("delete message failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete message")
+		return
+	}
+
+	// Broadcast deletion to room
+	if h.broadcaster != nil {
+		if err := h.broadcaster.BroadcastMessageDeleted(r.Context(), messageID, msg.ConversationID, userID); err != nil {
+			h.logger.Error("failed to broadcast message deletion", "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "message deleted"})
 }
 
 // GetStarredMessages godoc

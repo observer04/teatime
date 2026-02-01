@@ -25,6 +25,7 @@ export function useWebSocket(token) {
         created_at: payload.created_at,
         attachment_id: payload.attachment_id,
         attachment: payload.attachment,
+        receipt_status: 'sent', // New messages start as "sent"
         sender: {
           id: payload.sender_id,
           username: payload.sender_username
@@ -40,9 +41,43 @@ export function useWebSocket(token) {
       }));
     });
 
+    // Handle receipt updates (single and batch)
+    const unsubReceipt = wsService.on('receipt.updated', (payload) => {
+      console.log('Received receipt.updated:', payload);
+      
+      // Handle both single message and batch updates
+      const messageIDs = payload.message_ids || [payload.message_id];
+      const status = payload.status; // "delivered" or "read"
+      const conversationId = payload.conversation_id;
+      
+      setMessages(prev => {
+        const conversationMessages = prev[conversationId];
+        if (!conversationMessages) return prev;
+        
+        return {
+          ...prev,
+          [conversationId]: conversationMessages.map(msg => {
+            if (messageIDs.includes(msg.id)) {
+              // Only upgrade status (sent -> delivered -> read)
+              const currentStatus = msg.receipt_status || 'sent';
+              const shouldUpgrade = 
+                (currentStatus === 'sent' && (status === 'delivered' || status === 'read')) ||
+                (currentStatus === 'delivered' && status === 'read');
+              
+              if (shouldUpgrade) {
+                return { ...msg, receipt_status: status };
+              }
+            }
+            return msg;
+          })
+        };
+      });
+    });
+
     return () => {
       unsubConnection();
       unsubMessage();
+      unsubReceipt();
       wsService.disconnect();
     };
   }, [token]);
@@ -76,6 +111,11 @@ export function useWebSocket(token) {
     wsService.send('typing.stop', { conversation_id: conversationId });
   }, []);
 
+  // Mark a message as read
+  const markAsRead = useCallback((messageId) => {
+    wsService.send('receipt.read', { message_id: messageId });
+  }, []);
+
   return {
     isConnected,
     messages,
@@ -84,6 +124,7 @@ export function useWebSocket(token) {
     joinRoom,
     leaveRoom,
     startTyping,
-    stopTyping
+    stopTyping,
+    markAsRead
   };
 }

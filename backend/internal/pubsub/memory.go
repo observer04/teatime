@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 )
 
@@ -25,12 +26,14 @@ type MemoryPubSub struct {
 	subscribers map[string]map[uint64]*memorySubscription
 	nextID      uint64
 	closed      bool
+	logger      *slog.Logger
 }
 
 // NewMemoryPubSub creates a new in-memory pub/sub instance
 func NewMemoryPubSub() *MemoryPubSub {
 	return &MemoryPubSub{
 		subscribers: make(map[string]map[uint64]*memorySubscription),
+		logger:      slog.Default().With("component", "pubsub"),
 	}
 }
 
@@ -45,8 +48,11 @@ func (ps *MemoryPubSub) Publish(ctx context.Context, topic string, msg *Message)
 	subs, ok := ps.subscribers[topic]
 	if !ok || len(subs) == 0 {
 		ps.mu.RUnlock()
+		ps.logger.Warn("no subscribers for topic", "topic", topic, "msg_type", msg.Type, "all_topics", ps.listTopics())
 		return nil
 	}
+
+	ps.logger.Info("publishing to topic", "topic", topic, "msg_type", msg.Type, "subscriber_count", len(subs))
 
 	// Copy handlers to avoid holding lock during callback
 	handlers := make([]Handler, 0, len(subs))
@@ -62,6 +68,15 @@ func (ps *MemoryPubSub) Publish(ctx context.Context, topic string, msg *Message)
 	}
 
 	return nil
+}
+
+// listTopics returns all topics with subscribers (for debugging)
+func (ps *MemoryPubSub) listTopics() []string {
+	topics := make([]string, 0, len(ps.subscribers))
+	for t := range ps.subscribers {
+		topics = append(topics, t)
+	}
+	return topics
 }
 
 // Subscribe registers a handler for the given topic

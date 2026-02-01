@@ -1,8 +1,8 @@
 import { useState } from "react"
-import { Search, MoreVertical, SquarePlus, Users, Star, CheckSquare, BookOpen, LogOut, CheckCheck, ImageIcon } from "lucide-react"
+import { Search, MoreVertical, SquarePlus, Users, Star, CheckSquare, BookOpen, LogOut, CheckCheck, ImageIcon, MessageSquarePlus } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
-export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [], onLogout, onNewGroup, onOpenStarred, onMarkAllRead }) {
+export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [], onLogout, onNewGroup, onNewChat, onOpenStarred, onMarkAllRead, isMobile = false }) {
   const [activeFilter, setActiveFilter] = useState("All")
   const [searchQuery, setSearchQuery] = useState("")
   const [showMenu, setShowMenu] = useState(false)
@@ -47,14 +47,23 @@ export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [],
   }
 
   return (
-    <aside className="w-80 h-full flex flex-col bg-card border-r border-border">
+    <aside className={`${isMobile ? 'w-full' : 'w-80'} h-full flex flex-col bg-card border-r border-border`}>
       <div className="px-4 py-3 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-foreground">Chats</h1>
         <div className="flex items-center gap-1">
           <button 
-            onClick={onNewGroup}
+            onClick={onNewChat}
             className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             aria-label="New chat"
+            title="Start new chat"
+          >
+            <MessageSquarePlus className="w-5 h-5" />
+          </button>
+          <button 
+            onClick={onNewGroup}
+            className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            aria-label="New group"
+            title="Create group"
           >
             <SquarePlus className="w-5 h-5" />
           </button>
