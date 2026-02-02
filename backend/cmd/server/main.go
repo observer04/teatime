@@ -117,9 +117,17 @@ func main() {
 	webrtcManager := webrtc.NewManager(webrtcConfig, ps, logger)
 	callHandler := webrtc.NewCallHandler(webrtcManager, convRepo, callRepo, ps, logger)
 
+	// Initialize SFU for group calls
+	sfuConfig := &webrtc.SFUConfig{
+		ICEServers: webrtcConfig.GetPionICEServers(),
+	}
+	sfu := webrtc.NewSFU(sfuConfig, ps, logger)
+	sfuHandler := webrtc.NewSFUHandler(sfu, webrtcManager, convRepo, callRepo, ps, logger)
+
 	// Initialize WebSocket hub and handler
 	wsHub := websocket.NewHub(authService, convRepo, userRepo, attachmentRepo, ps, logger)
 	wsHub.SetCallHandler(callHandler)
+	wsHub.SetSFUHandler(sfuHandler)
 	go wsHub.Run(context.Background())
 	wsHandler := websocket.NewHandler(wsHub, logger)
 

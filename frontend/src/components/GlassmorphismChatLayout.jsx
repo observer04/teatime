@@ -61,6 +61,7 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     isVideoOff,
     participants,
     incomingCall,
+    error: webrtcError,
     joinCall,
     leaveCall,
     toggleMute,
@@ -70,6 +71,13 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
   } = useWebRTC(user.id);
 
   const [showVideoCall, setShowVideoCall] = useState(false);
+
+  // Show alert when WebRTC error occurs
+  useEffect(() => {
+    if (webrtcError) {
+      alert(`Call Error: ${webrtcError}`);
+    }
+  }, [webrtcError]);
 
   useEffect(() => {
     loadConversations();
@@ -412,9 +420,15 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
         callType={incomingCall?.callType}
         isGroup={incomingCall?.isGroup}
         conversationName={incomingCall?.conversationName}
-        onAccept={(withVideo) => {
-          acceptCall(withVideo);
-          setShowVideoCall(true);
+        onAccept={async (withVideo) => {
+          try {
+            await acceptCall(withVideo);
+            // Only show video call UI if accept succeeded
+            setShowVideoCall(true);
+          } catch (err) {
+            console.error('Failed to accept call:', err);
+            // Error is already set in useWebRTC hook, just log here
+          }
         }}
         onDecline={declineCall}
       />

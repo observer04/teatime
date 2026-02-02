@@ -55,51 +55,83 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		return nil, &CallError{Code: "not_member", Message: "Not a member of this conversation"}
 	}
 
-	// Check if this is a new call or joining existing
-	room := h.manager.GetRoom(roomID)
-	isNewCall := room == nil || room.ParticipantCount() == 0
-
-	// Join the call
-	room, err = h.manager.JoinCall(ctx, roomID, sigCtx.UserID, sigCtx.Username)
+	// Join the call first - this is atomic
+	room, err := h.manager.JoinCall(ctx, roomID, sigCtx.UserID, sigCtx.Username)
 	if err != nil {
 		return nil, &CallError{Code: "join_failed", Message: err.Error()}
 	}
 
-	// If this is a new call, create call log and notify other members
-	if isNewCall && h.callRepo != nil {
-		// Determine call type from payload (default to video)
+	// Check if this user is the call initiator (first participant)
+	// We determine this by checking if the room has a CallID already set
+	existingCallID := room.GetCallID()
+	isInitiator := existingCallID == uuid.Nil
+
+	// If there's an existing call ID, verify it's still active in the database
+	// This handles cases where the room persisted but the call ended (e.g., due to disconnects)
+	if !isInitiator && h.callRepo != nil {
+		isActive, err := h.callRepo.IsCallActive(ctx, existingCallID)
+		if err != nil {
+			h.logger.Error("failed to check if call is active", "error", err, "call_id", existingCallID)
+		} else if !isActive {
+			// Call ended but room still exists - clear the CallID and treat as new call
+			h.logger.Info("existing call ID found but call is no longer active, treating as new call",
+				"room_id", roomID,
+				"old_call_id", existingCallID)
+			room.SetCallID(uuid.Nil)
+			existingCallID = uuid.Nil
+			isInitiator = true
+		}
+	}
+
+	h.logger.Info("user joining call",
+		"room_id", roomID,
+		"user_id", sigCtx.UserID,
+		"username", sigCtx.Username,
+		"is_initiator", isInitiator,
+		"existing_call_id", existingCallID,
+		"participant_count", room.ParticipantCount())
+
+	if isInitiator && h.callRepo != nil {
+		// This is the call initiator - create call log and notify others
 		callType := database.CallTypeVideo
-		
-		// Create call log
+
 		callLog, err := h.callRepo.CreateCallLog(ctx, roomID, sigCtx.UserID, callType)
 		if err != nil {
 			h.logger.Error("failed to create call log", "error", err)
 		} else {
 			// Add initiator as participant
 			h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
-			
+
 			// Store call ID in room for later reference
 			room.SetCallID(callLog.ID)
-			
+
 			// Notify other conversation members about incoming call
 			h.broadcastIncomingCall(ctx, roomID, callLog.ID, sigCtx, callType)
 		}
-	} else if room.GetCallID() != uuid.Nil && h.callRepo != nil {
+	} else if existingCallID != uuid.Nil && h.callRepo != nil {
 		// Joining existing call - add as participant and start call if needed
-		h.callRepo.AddParticipant(ctx, room.GetCallID(), sigCtx.UserID)
-		
-		// If this is the second person, start the call
+		h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
+
+		// If this is the second person, mark call as started
 		if room.ParticipantCount() == 2 {
-			h.callRepo.StartCall(ctx, room.GetCallID())
+			h.callRepo.StartCall(ctx, existingCallID)
 		}
 	}
 
 	// Return config with ICE servers and current participants
-	return &CallConfigPayload{
+	config := &CallConfigPayload{
 		RoomID:       roomID,
 		ICEServers:   h.manager.GetConfig().GetICEServers(),
 		Participants: room.GetParticipants(),
-	}, nil
+	}
+	
+	h.logger.Info("sending call config",
+		"room_id", roomID,
+		"user_id", sigCtx.UserID,
+		"participant_count", len(config.Participants),
+		"participants", config.Participants)
+	
+	return config, nil
 }
 
 // broadcastIncomingCall notifies other conversation members about an incoming call
@@ -111,7 +143,7 @@ func (h *CallHandler) broadcastIncomingCall(ctx context.Context, conversationID,
 		return
 	}
 
-	h.logger.Info("broadcasting incoming call", 
+	h.logger.Info("broadcasting incoming call",
 		"conversation_id", conversationID,
 		"call_id", callID,
 		"caller_id", caller.UserID,
@@ -133,18 +165,18 @@ func (h *CallHandler) broadcastIncomingCall(ctx context.Context, conversationID,
 
 	// Notify all members except the caller
 	for _, member := range conv.Members {
-		h.logger.Debug("checking member for notification", 
-			"member_id", member.UserID, 
+		h.logger.Debug("checking member for notification",
+			"member_id", member.UserID,
 			"caller_id", caller.UserID,
 			"is_caller", member.UserID == caller.UserID)
-			
+
 		if member.UserID == caller.UserID {
 			continue
 		}
 
 		topic := pubsub.Topics.User(member.UserID.String())
-		h.logger.Info("sending call.incoming to user", 
-			"user_id", member.UserID, 
+		h.logger.Info("sending call.incoming to user",
+			"user_id", member.UserID,
 			"topic", topic)
 
 		msg := &pubsub.Message{
@@ -172,7 +204,21 @@ func (h *CallHandler) HandleLeave(ctx context.Context, sigCtx *SignalingContext,
 		return &CallError{Code: "invalid_room", Message: "Invalid room ID"}
 	}
 
+	// Get room before leaving to check if it will become empty
+	room := h.manager.GetRoom(roomID)
+	var callID uuid.UUID
+	if room != nil {
+		callID = room.GetCallID()
+	}
+
 	h.manager.LeaveCall(ctx, roomID, sigCtx.UserID, sigCtx.Username)
+
+	// If the room was deleted (became empty), end the call in the database
+	if room != nil && h.manager.GetRoom(roomID) == nil && callID != uuid.Nil && h.callRepo != nil {
+		h.logger.Info("ending call in database", "call_id", callID)
+		h.callRepo.EndCall(ctx, callID)
+	}
+
 	return nil
 }
 

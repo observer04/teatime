@@ -39,6 +39,7 @@ type Hub struct {
 	attachmentRepo *database.AttachmentRepository
 	pubsub         pubsub.PubSub
 	callHandler    *webrtc.CallHandler
+	sfuHandler     *webrtc.SFUHandler
 	logger         *slog.Logger
 
 	// PubSub subscriptions for room-level events
@@ -65,6 +66,11 @@ func NewHub(authService *auth.Service, convRepo *database.ConversationRepository
 // SetCallHandler sets the WebRTC call handler for processing call events
 func (h *Hub) SetCallHandler(ch *webrtc.CallHandler) {
 	h.callHandler = ch
+}
+
+// SetSFUHandler sets the SFU handler for group calls
+func (h *Hub) SetSFUHandler(sh *webrtc.SFUHandler) {
+	h.sfuHandler = sh
 }
 
 // Run starts the hub's main loop
@@ -111,6 +117,7 @@ func (h *Hub) handleUnregister(client *Client) {
 	h.mu.Lock()
 
 	userID := client.UserID()
+	username := client.Username()
 	if userID != uuid.Nil {
 		// Remove from user's client set
 		if clients, ok := h.clients[userID]; ok {
@@ -120,6 +127,12 @@ func (h *Hub) handleUnregister(client *Client) {
 				// User is now offline - could broadcast presence here
 			}
 		}
+	}
+
+	// Track rooms for call cleanup
+	roomsForCallCleanup := make([]uuid.UUID, 0, len(client.rooms))
+	for roomID := range client.rooms {
+		roomsForCallCleanup = append(roomsForCallCleanup, roomID)
 	}
 
 	// Remove from all rooms and track which rooms need unsubscribe
@@ -135,6 +148,18 @@ func (h *Hub) handleUnregister(client *Client) {
 	}
 
 	h.mu.Unlock()
+
+	// Clean up call participation for this user (they might be in active calls)
+	if userID != uuid.Nil && h.callHandler != nil {
+		for _, roomID := range roomsForCallCleanup {
+			// Attempt to leave any active calls in rooms the user was in
+			ctx := context.Background()
+			h.callHandler.HandleLeave(ctx, &webrtc.SignalingContext{
+				UserID:   userID,
+				Username: username,
+			}, json.RawMessage(`{"room_id":"`+roomID.String()+`"}`))
+		}
+	}
 
 	// Unsubscribe from empty rooms (outside lock)
 	for _, roomID := range roomsToCheck {
@@ -173,6 +198,11 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleCallAnswer(client, msg.Payload)
 	case webrtc.EventTypeCallICECandidate:
 		h.handleCallICECandidate(client, msg.Payload)
+	// SFU group call events
+	case webrtc.EventTypeSFUAnswer:
+		h.handleSFUAnswer(client, msg.Payload)
+	case webrtc.EventTypeSFUCandidate:
+		h.handleSFUCandidate(client, msg.Payload)
 	default:
 		client.sendError("unknown_event", "Unknown event type: "+msg.Type)
 	}
@@ -581,6 +611,42 @@ func (h *Hub) handleCallICECandidate(client *Client, payload json.RawMessage) {
 	h.callHandler.HandleICECandidate(context.Background(), sigCtx, payload)
 }
 
+func (h *Hub) handleSFUAnswer(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		client.sendError("not_authenticated", "Must authenticate first")
+		return
+	}
+
+	if h.sfuHandler == nil {
+		client.sendError("sfu_disabled", "SFU group calls are not enabled")
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	if err := h.sfuHandler.HandleSFUAnswer(context.Background(), sigCtx, payload); err != nil {
+		if callErr, ok := err.(*webrtc.CallError); ok {
+			client.sendError(callErr.Code, callErr.Message)
+		}
+	}
+}
+
+func (h *Hub) handleSFUCandidate(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.sfuHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	h.sfuHandler.HandleSFUCandidate(context.Background(), sigCtx, payload)
+}
+
 // BroadcastToRoom sends a message to all clients in a room via PubSub
 func (h *Hub) BroadcastToRoom(roomID uuid.UUID, eventType string, payload interface{}) {
 	payloadBytes, err := json.Marshal(payload)
@@ -715,7 +781,7 @@ func (h *Hub) deliverToRoom(roomID uuid.UUID, psMsg *pubsub.Message) {
 func (h *Hub) subscribeUserToEvents(client *Client, userID uuid.UUID) {
 	topic := pubsub.Topics.User(userID.String())
 	h.logger.Info("subscribing user to events", "user_id", userID, "topic", topic)
-	
+
 	sub, err := h.pubsub.Subscribe(context.Background(), topic, func(ctx context.Context, msg *pubsub.Message) {
 		h.logger.Info("received pubsub message for user", "user_id", userID, "type", msg.Type, "topic", msg.Topic)
 		wsMsg := &Message{

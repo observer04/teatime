@@ -336,6 +336,20 @@ func (r *CallRepository) getOtherUserInDM(ctx context.Context, conversationID, c
 	return &user, nil
 }
 
+// IsCallActive checks if a specific call is still active/ringing
+func (r *CallRepository) IsCallActive(ctx context.Context, callID uuid.UUID) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM call_logs 
+			WHERE id = $1 AND status IN ('ringing', 'active')
+		)
+	`
+
+	var exists bool
+	err := r.db.Pool.QueryRow(ctx, query, callID).Scan(&exists)
+	return exists, err
+}
+
 // GetMissedCallCount returns the count of missed calls for a user since a given time
 func (r *CallRepository) GetMissedCallCount(ctx context.Context, userID uuid.UUID, since time.Time) (int, error) {
 	query := `

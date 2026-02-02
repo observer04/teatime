@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/observer/teatime/internal/pubsub"
+	pionwebrtc "github.com/pion/webrtc/v3"
 )
 
 // ICEServer represents a STUN/TURN server configuration
@@ -47,6 +48,26 @@ func (c *Config) GetICEServers() []ICEServer {
 	return servers
 }
 
+// GetPionICEServers returns ICE server configuration in Pion WebRTC format
+func (c *Config) GetPionICEServers() []pionwebrtc.ICEServer {
+	servers := make([]pionwebrtc.ICEServer, 0, 2)
+
+	if len(c.STUNURLs) > 0 {
+		servers = append(servers, pionwebrtc.ICEServer{URLs: c.STUNURLs})
+	}
+
+	if len(c.TURNURLs) > 0 && c.TURNUsername != "" {
+		servers = append(servers, pionwebrtc.ICEServer{
+			URLs:           c.TURNURLs,
+			Username:       c.TURNUsername,
+			Credential:     c.TURNPassword,
+			CredentialType: pionwebrtc.ICECredentialTypePassword,
+		})
+	}
+
+	return servers
+}
+
 // Participant represents a user in a call
 type Participant struct {
 	UserID   uuid.UUID `json:"user_id"`
@@ -56,7 +77,7 @@ type Participant struct {
 
 // Room represents an active video call
 type Room struct {
-	ID           uuid.UUID `json:"id"` // Same as conversation ID
+	ID           uuid.UUID `json:"id"`      // Same as conversation ID
 	CallID       uuid.UUID `json:"call_id"` // Reference to call_logs entry
 	Participants map[uuid.UUID]*Participant
 	mu           sync.RWMutex
@@ -174,10 +195,10 @@ func (m *Manager) DeleteRoom(roomID uuid.UUID) {
 // JoinCall adds a user to a call and notifies other participants
 func (m *Manager) JoinCall(ctx context.Context, roomID, userID uuid.UUID, username string) (*Room, error) {
 	room := m.GetOrCreateRoom(roomID)
-	
+
 	// Get existing participants before adding the new one
 	existingParticipants := room.GetParticipants()
-	
+
 	room.AddParticipant(userID, username)
 
 	// Notify other participants via pubsub (send to each user's topic)
@@ -189,7 +210,7 @@ func (m *Manager) JoinCall(ctx context.Context, roomID, userID uuid.UUID, userna
 	}
 
 	payloadBytes, _ := json.Marshal(event)
-	
+
 	// Send to each existing participant's user topic
 	for _, p := range existingParticipants {
 		if p.UserID == userID {
@@ -216,7 +237,7 @@ func (m *Manager) LeaveCall(ctx context.Context, roomID, userID uuid.UUID, usern
 
 	// Get remaining participants before removing this user
 	remainingParticipants := room.GetParticipants()
-	
+
 	room.RemoveParticipant(userID)
 
 	// Notify remaining participants via pubsub (send to each user's topic)
@@ -228,7 +249,7 @@ func (m *Manager) LeaveCall(ctx context.Context, roomID, userID uuid.UUID, usern
 	}
 
 	payloadBytes, _ := json.Marshal(event)
-	
+
 	// Send to each remaining participant's user topic
 	for _, p := range remainingParticipants {
 		if p.UserID == userID {
