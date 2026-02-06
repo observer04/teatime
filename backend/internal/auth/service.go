@@ -242,6 +242,17 @@ func (s *Service) RefreshTokenTTL() time.Duration {
 	return s.tokens.RefreshTokenTTL()
 }
 
+// GenerateAccessToken creates an access token (for OAuth flow)
+func (s *Service) GenerateAccessToken(userID uuid.UUID, username string) (string, error) {
+	token, _, err := s.tokens.GenerateAccessToken(userID, username)
+	return token, err
+}
+
+// GenerateRefreshToken creates a refresh token (for OAuth flow)
+func (s *Service) GenerateRefreshToken() (string, time.Time, error) {
+	return s.tokens.GenerateRefreshToken()
+}
+
 // ============================================================================
 // Validation helpers
 // ============================================================================

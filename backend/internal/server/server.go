@@ -13,6 +13,7 @@ import (
 	"github.com/observer/teatime/internal/auth"
 	"github.com/observer/teatime/internal/config"
 	"github.com/observer/teatime/internal/database"
+	"github.com/observer/teatime/internal/middleware"
 	"github.com/observer/teatime/internal/storage"
 	"github.com/observer/teatime/internal/websocket"
 )
@@ -31,6 +32,7 @@ type Dependencies struct {
 	ConvHandler    *api.ConversationHandler
 	CallHandler    *api.CallHandler
 	UploadHandler  *api.UploadHandler
+	OAuthHandler   *api.OAuthHandlers
 	WSHandler      *websocket.Handler
 	StaticDir      string
 	Logger         *slog.Logger
@@ -85,10 +87,11 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 	})
 
 	// =========================================================================
-	// Auth routes (public)
+	// Auth routes (public) - with rate limiting for brute force protection
 	// =========================================================================
-	mux.HandleFunc("POST /auth/register", deps.AuthHandler.Register)
-	mux.HandleFunc("POST /auth/login", deps.AuthHandler.Login)
+	rateLimiter := middleware.NewRateLimiter(60) // 60 requests/min per user
+	mux.Handle("POST /auth/register", rateLimiter.Middleware(http.HandlerFunc(deps.AuthHandler.Register)))
+	mux.Handle("POST /auth/login", rateLimiter.Middleware(http.HandlerFunc(deps.AuthHandler.Login)))
 	mux.HandleFunc("POST /auth/refresh", deps.AuthHandler.Refresh)
 	mux.HandleFunc("POST /auth/logout", deps.AuthHandler.Logout)
 
@@ -96,6 +99,15 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 	// Protected routes (require auth)
 	// =========================================================================
 	authMiddleware := auth.Middleware(deps.AuthService)
+
+	// =========================================================================
+	// OAuth routes (Google Sign-In)
+	// =========================================================================
+	if deps.OAuthHandler != nil {
+		mux.HandleFunc("GET /auth/google", deps.OAuthHandler.HandleGoogleAuth)
+		mux.HandleFunc("GET /auth/google/callback", deps.OAuthHandler.HandleGoogleCallback)
+		mux.Handle("POST /auth/set-username", authMiddleware(http.HandlerFunc(deps.OAuthHandler.HandleSetUsername)))
+	}
 
 	// Me endpoint
 	mux.Handle("GET /auth/me", authMiddleware(http.HandlerFunc(deps.AuthHandler.Me)))

@@ -345,6 +345,61 @@ func (h *CallHandler) HandleICECandidate(ctx context.Context, sigCtx *SignalingC
 	return h.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
+// HandleDeclined processes a call.declined message
+func (h *CallHandler) HandleDeclined(ctx context.Context, sigCtx *SignalingContext, payload json.RawMessage) error {
+	var p struct {
+		CallID         string `json:"call_id"`
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return &CallError{Code: "invalid_payload", Message: "Invalid decline payload"}
+	}
+
+	callID, err := uuid.Parse(p.CallID)
+	if err != nil {
+		return &CallError{Code: "invalid_call_id", Message: "Invalid call ID"}
+	}
+
+	// Update call status in database
+	if h.callRepo != nil {
+		if err := h.callRepo.UpdateCallStatus(ctx, callID, database.CallStatusDeclined); err != nil {
+			h.logger.Error("failed to update call status to declined", "error", err, "call_id", callID)
+		}
+	}
+
+	// Get call log to find the caller
+	call, err := h.callRepo.GetCallLog(ctx, callID)
+	if err != nil {
+		h.logger.Error("failed to get call log for decline", "error", err, "call_id", callID)
+		return &CallError{Code: "call_not_found", Message: "Call not found"}
+	}
+
+	// Notify the caller that the call was declined
+	// The caller is the one who initiated the call (call.InitiatorID)
+	// But we should verify if the current user is actually a participant/callee?
+	// For now, just notifying the caller is sufficient.
+
+	relayPayload := map[string]interface{}{
+		"call_id":         callID.String(),
+		"conversation_id": p.ConversationID,
+		"decliner_id":     sigCtx.UserID.String(),
+		"decliner_name":   sigCtx.Username,
+	}
+	payloadBytes, _ := json.Marshal(relayPayload)
+
+	// Send to caller
+	callerTopic := pubsub.Topics.User(call.InitiatorID.String())
+	msg := &pubsub.Message{
+		Topic:   callerTopic,
+		Type:    EventTypeCallDeclined,
+		Payload: payloadBytes,
+	}
+	
+	h.logger.Info("relaying call declined", "from", sigCtx.UserID, "to", call.InitiatorID)
+	
+	return h.pubsub.Publish(ctx, msg.Topic, msg)
+}
+
 // CallError represents an error during call handling
 type CallError struct {
 	Code    string

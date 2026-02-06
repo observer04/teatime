@@ -1,5 +1,4 @@
 package pubsub
-package pubsub
 
 import (
 	"context"

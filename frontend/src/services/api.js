@@ -53,6 +53,7 @@ class ApiService {
     try {
       const response = await fetch(`${this.baseURL}${endpoint}`, {
         ...options,
+        credentials: 'include', // Send cookies (refresh token) with requests
         headers,
       });
 
@@ -93,7 +94,24 @@ class ApiService {
     });
   }
 
+  // OAuth - Get Google auth URL (redirect user here)
+  getGoogleAuthURL() {
+    return `${this.baseURL}/auth/google`;
+  }
+
+  // OAuth - Set username for new OAuth users
+  async setUsername(username) {
+    return this.request('/auth/set-username', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    });
+  }
+
   // Users
+  async getMe() {
+    return this.request('/users/me');
+  }
+
   async searchUsers(query) {
     return this.request(`/users/search?q=${encodeURIComponent(query)}`);
   }

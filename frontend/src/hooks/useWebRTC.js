@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React from 'react';
 import wsService from '../services/websocket';
 
 // ICE configuration will be received from server
@@ -14,41 +14,41 @@ const DEFAULT_ICE_CONFIG = {
  * Supports both P2P mesh (1:1 calls) and SFU (group calls)
  */
 export function useWebRTC(userId) {
-  const [isInCall, setIsInCall] = useState(false);
-  const [callRoomId, setCallRoomId] = useState(null);
-  const [callMode, setCallMode] = useState('p2p'); // 'p2p' or 'sfu'
-  const [participants, setParticipants] = useState([]);
-  const [localStream, setLocalStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState({});
-  const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
-  const [iceServers, setIceServers] = useState(DEFAULT_ICE_CONFIG.iceServers);
-  const [error, setError] = useState(null);
-  const [callState, setCallState] = useState('idle'); // idle, connecting, connected, reconnecting
+  const [isInCall, setIsInCall] = React.useState(false);
+  const [callRoomId, setCallRoomId] = React.useState(null);
+  const [callMode, setCallMode] = React.useState('p2p'); // 'p2p' or 'sfu'
+  const [participants, setParticipants] = React.useState([]);
+  const [localStream, setLocalStream] = React.useState(null);
+  const [remoteStreams, setRemoteStreams] = React.useState({});
+  const [isMuted, setIsMuted] = React.useState(false);
+  const [isVideoOff, setIsVideoOff] = React.useState(false);
+  const [iceServers, setIceServers] = React.useState(DEFAULT_ICE_CONFIG.iceServers);
+  const [error, setError] = React.useState(null);
+  const [callState, setCallState] = React.useState('idle'); // idle, connecting, connected, reconnecting
   
   // Incoming call state
-  const [incomingCall, setIncomingCall] = useState(null); // { callId, conversationId, caller, callType, isGroup, conversationName }
+  const [incomingCall, setIncomingCall] = React.useState(null); // { callId, conversationId, caller, callType, isGroup, conversationName }
   
   // P2P: Store peer connections by user ID
-  const peerConnections = useRef(new Map());
-  const pendingCandidates = useRef(new Map()); // Store ICE candidates until connection is ready
+  const peerConnections = React.useRef(new Map());
+  const pendingCandidates = React.useRef(new Map()); // Store ICE candidates until connection is ready
   
   // CRITICAL: Use refs for values that need to be accessed in callbacks without stale closures
-  const localStreamRef = useRef(null);
-  const callRoomIdRef = useRef(null);
-  const iceServersRef = useRef(DEFAULT_ICE_CONFIG.iceServers);
+  const localStreamRef = React.useRef(null);
+  const callRoomIdRef = React.useRef(null);
+  const iceServersRef = React.useRef(DEFAULT_ICE_CONFIG.iceServers);
   
   // Track if we've ever had other participants (for proper call ending)
-  const hasEverHadParticipants = useRef(false);
-  const maxParticipantCount = useRef(0);
+  const hasEverHadParticipants = React.useRef(false);
+  const maxParticipantCount = React.useRef(0);
   
   // Keep refs in sync with state
-  useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
-  useEffect(() => { callRoomIdRef.current = callRoomId; }, [callRoomId]);
-  useEffect(() => { iceServersRef.current = iceServers; }, [iceServers]);
+  React.useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
+  React.useEffect(() => { callRoomIdRef.current = callRoomId; }, [callRoomId]);
+  React.useEffect(() => { iceServersRef.current = iceServers; }, [iceServers]);
   
   // Track max participants we've seen
-  useEffect(() => {
+  React.useEffect(() => {
     const otherCount = participants.filter(p => p.user_id !== userId).length;
     if (otherCount > 0) {
       hasEverHadParticipants.current = true;
@@ -57,11 +57,11 @@ export function useWebRTC(userId) {
   }, [participants, userId]);
   
   // SFU: Single peer connection to server
-  const sfuConnection = useRef(null);
-  const sfuPendingCandidates = useRef([]);
+  const sfuConnection = React.useRef(null);
+  const sfuPendingCandidates = React.useRef([]);
 
   // Clean up peer connection (P2P mode)
-  const closePeerConnection = useCallback((peerId) => {
+  const closePeerConnection = React.useCallback((peerId) => {
     const pc = peerConnections.current.get(peerId);
     if (pc) {
       pc.close();
@@ -76,7 +76,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // Close SFU connection
-  const closeSFUConnection = useCallback(() => {
+  const closeSFUConnection = React.useCallback(() => {
     if (sfuConnection.current) {
       sfuConnection.current.close();
       sfuConnection.current = null;
@@ -87,7 +87,7 @@ export function useWebRTC(userId) {
 
   // Create SFU peer connection (one connection to server that handles all tracks)
   // Uses refs to avoid stale closures
-  const createSFUConnection = useCallback(async (stream) => {
+  const createSFUConnection = React.useCallback(async (stream) => {
     console.log('Creating SFU connection');
     console.log('Stream provided:', !!stream, 'tracks:', stream?.getTracks().length);
     
@@ -166,7 +166,7 @@ export function useWebRTC(userId) {
 
   // Create a peer connection for a specific user
   // CRITICAL: Uses refs to avoid stale closure issues with localStream
-  const createPeerConnection = useCallback((peerId, peerName, isInitiator) => {
+  const createPeerConnection = React.useCallback((peerId, peerName, isInitiator) => {
     if (peerConnections.current.has(peerId)) {
       console.log('Peer connection already exists for:', peerId);
       return peerConnections.current.get(peerId);
@@ -268,10 +268,55 @@ export function useWebRTC(userId) {
     return pc;
   }, [localStream]); // Only depend on localStream for re-creation logging, actual values come from refs
 
+  // Track cleanup timers to prevent race conditions
+  const cleanupTimersRef = React.useRef({
+    participantLeft: null,
+    autoEnd: null,
+    endedDelay: null
+  });
+  
+  // Guard against concurrent join attempts
+  const isJoiningRef = React.useRef(false);
+
+  // Helper to clear all pending cleanup timers
+  const clearCleanupTimers = React.useCallback(() => {
+    if (cleanupTimersRef.current.participantLeft) {
+      clearTimeout(cleanupTimersRef.current.participantLeft);
+      cleanupTimersRef.current.participantLeft = null;
+    }
+    if (cleanupTimersRef.current.autoEnd) {
+      clearTimeout(cleanupTimersRef.current.autoEnd);
+      cleanupTimersRef.current.autoEnd = null;
+    }
+    if (cleanupTimersRef.current.endedDelay) {
+      clearTimeout(cleanupTimersRef.current.endedDelay);
+      cleanupTimersRef.current.endedDelay = null;
+    }
+  }, []);
+
+  // Helper to stop media tracks and cleanup state
+  const cleanupMedia = React.useCallback(() => {
+    // Stop local stream tracks
+    const stream = localStreamRef.current;
+    if (stream) {
+      console.log('Stopping local media tracks');
+      stream.getTracks().forEach(track => {
+        try {
+          track.enabled = false;
+          track.stop();
+        } catch (e) {
+          console.warn('Error stopping track:', e);
+        }
+      });
+      setLocalStream(null);
+      localStreamRef.current = null;
+    }
+  }, []);
+
   // Initialize local media stream
-  const getLocalMedia = useCallback(async (video = true) => {
+  const getLocalMedia = React.useCallback(async (video = true, retryCount = 0) => {
     try {
-      console.log('Requesting media permissions...');
+      console.log(`Requesting media permissions...${retryCount > 0 ? ` (Attempt ${retryCount + 1})` : ''}`);
       const stream = await navigator.mediaDevices.getUserMedia({
         video: video ? { width: 640, height: 480 } : false,
         audio: true
@@ -293,6 +338,11 @@ export function useWebRTC(userId) {
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         errorMessage = 'No camera or microphone found. Please connect a device and try again.';
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        if (retryCount < 2) {
+          console.warn('Camera/mic in use, retrying in 1s...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return getLocalMedia(video, retryCount + 1);
+        }
         errorMessage = 'Camera/microphone is already in use by another application.';
       } else if (err.name === 'OverconstrainedError') {
         errorMessage = 'Camera does not support the requested resolution.';
@@ -306,7 +356,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // Try to get media with fallback options
-  const getLocalMediaWithFallback = useCallback(async (preferVideo = true) => {
+  const getLocalMediaWithFallback = React.useCallback(async (preferVideo = true) => {
     // Try with video first
     if (preferVideo) {
       try {
@@ -353,8 +403,24 @@ export function useWebRTC(userId) {
   }, [getLocalMedia]);
 
   // Join a call
-  const joinCall = useCallback(async (roomId, videoEnabled = true) => {
+  const joinCall = React.useCallback(async (roomId, videoEnabled = true) => {
+    // Prevent concurrent joins
+    if (isJoiningRef.current) {
+      console.warn('Join call ignored - already joining');
+      return;
+    }
+    isJoiningRef.current = true;
+
     try {
+      // Clear any pending auto-end timers from previous calls
+      clearCleanupTimers();
+
+      // Ensure we start with a clean slate
+      cleanupMedia();
+      
+      // Small delay to allow OS to release hardware devices from previous call
+      await new Promise(resolve => setTimeout(resolve, 750));
+
       setCallState('connecting');
       setError(null);
       
@@ -392,24 +458,26 @@ export function useWebRTC(userId) {
       // Error is already set by getLocalMediaWithFallback
       // Rethrow so acceptCall can handle it
       throw err;
+    } finally {
+      isJoiningRef.current = false;
     }
-  }, [getLocalMediaWithFallback]);
+  }, [getLocalMediaWithFallback, cleanupMedia, clearCleanupTimers]);
 
   // Leave the call
-  const leaveCall = useCallback(() => {
+  const leaveCall = React.useCallback(() => {
     console.log('leaveCall called');
+    isJoiningRef.current = false;
+    
+    // Clear any pending timers
+    clearCleanupTimers();
+
     const roomId = callRoomIdRef.current;
     if (roomId) {
       wsService.send('call.leave', { room_id: roomId });
     }
 
     // Stop local stream
-    const stream = localStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setLocalStream(null);
-      localStreamRef.current = null;
-    }
+    cleanupMedia();
 
     // Close connections based on mode
     if (callMode === 'sfu') {
@@ -432,10 +500,10 @@ export function useWebRTC(userId) {
     setParticipants([]);
     setRemoteStreams({});
     setCallState('idle');
-  }, [callMode, closePeerConnection, closeSFUConnection]);
+  }, [callMode, closePeerConnection, closeSFUConnection, cleanupMedia, clearCleanupTimers]);
 
   // Toggle mute
-  const toggleMute = useCallback(() => {
+  const toggleMute = React.useCallback(() => {
     if (localStream) {
       const audioTrack = localStream.getAudioTracks()[0];
       if (audioTrack) {
@@ -446,7 +514,7 @@ export function useWebRTC(userId) {
   }, [localStream]);
 
   // Toggle video
-  const toggleVideo = useCallback(() => {
+  const toggleVideo = React.useCallback(() => {
     if (localStream) {
       const videoTrack = localStream.getVideoTracks()[0];
       if (videoTrack) {
@@ -457,7 +525,7 @@ export function useWebRTC(userId) {
   }, [localStream]);
 
   // Handle incoming call config (after joining)
-  useEffect(() => {
+  React.useEffect(() => {
     const handleCallConfig = async (payload) => {
       console.log('=== CALL CONFIG RECEIVED ===');
       console.log('Payload:', payload);
@@ -465,8 +533,33 @@ export function useWebRTC(userId) {
       console.log('Participants from backend:', payload.participants);
       console.log('Local stream ref available:', !!localStreamRef.current);
       
-      // Update ICE servers ref immediately
-      const newIceServers = payload.ice_servers || DEFAULT_ICE_CONFIG.iceServers;
+      // Update ICE servers ref immediately with sanitization
+      let newIceServers = payload.ice_servers || [];
+      
+      // If we are not on localhost, filter out internal docker hostnames like 'coturn'
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (!isLocalhost) {
+        console.log('Running remotely, filtering out internal ICE servers...');
+        newIceServers = newIceServers.filter(server => {
+          const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+          // Keep server only if NONE of its URLs contain 'coturn'
+          return !urls.some(url => url.includes('coturn'));
+        });
+      }
+
+      // Ensure default public STUN servers are always present
+      const defaultStun = DEFAULT_ICE_CONFIG.iceServers;
+      const hasStun = newIceServers.some(server => {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        return urls.some(url => url.includes('stun.l.google.com'));
+      });
+
+      if (!hasStun) {
+        console.log('Adding default public STUN servers');
+        newIceServers = [...newIceServers, ...defaultStun];
+      }
+      
+      console.log('Sanitized ICE servers:', newIceServers);
       iceServersRef.current = newIceServers;
       setIceServers(newIceServers);
       
@@ -521,7 +614,7 @@ export function useWebRTC(userId) {
   }, [userId, createPeerConnection, createSFUConnection]);
 
   // Handle participant joined
-  useEffect(() => {
+  React.useEffect(() => {
     const handleParticipantJoined = (payload) => {
       console.log('Participant joined:', payload);
       if (payload.user_id === userId) return; // Ignore self
@@ -545,10 +638,29 @@ export function useWebRTC(userId) {
   }, [userId]);
 
   // Handle participant left
-  useEffect(() => {
+  React.useEffect(() => {
     const handleParticipantLeft = (payload) => {
       console.log('Participant left:', payload);
-      closePeerConnection(payload.user_id);
+      
+      if (callMode === 'sfu') {
+        // In SFU mode, finding the stream by user_id and removing it
+        setRemoteStreams(prev => {
+          const next = { ...prev };
+          const streamIdToRemove = Object.keys(next).find(
+            key => next[key].userId === payload.user_id
+          );
+          
+          if (streamIdToRemove) {
+            console.log('Removing SFU stream for user:', payload.user_id);
+            delete next[streamIdToRemove];
+          }
+          return next;
+        });
+      } else {
+        // P2P mode
+        closePeerConnection(payload.user_id);
+      }
+
       setParticipants(prev => {
         const newParticipants = prev.filter(p => p.user_id !== payload.user_id);
         // Count remaining participants (excluding ourselves)
@@ -558,7 +670,14 @@ export function useWebRTC(userId) {
         // For P2P calls: if someone was in call and left, end the call for remaining user
         if (hasEverHadParticipants.current && othersRemaining.length === 0) {
           console.log('Last participant left P2P call - ending call after delay');
-          setTimeout(() => {
+          
+          // Clear any existing timer
+          if (cleanupTimersRef.current.participantLeft) {
+            clearTimeout(cleanupTimersRef.current.participantLeft);
+          }
+          
+          cleanupTimersRef.current.participantLeft = setTimeout(() => {
+            // Only end if we are still in the same room
             if (callRoomIdRef.current) {
               setCallState('ended');
               // Give user a moment to see the ended state before full cleanup
@@ -573,27 +692,27 @@ export function useWebRTC(userId) {
 
     const unsubLeft = wsService.on('call.participant_left', handleParticipantLeft);
     return () => unsubLeft();
-  }, [closePeerConnection, userId, leaveCall]);
+  }, [closePeerConnection, userId, leaveCall, callMode]);
 
   // Track if we've ever had a successful connection (used to prevent premature call ending)
-  const hasEverConnected = useRef(false);
+  const hasEverConnected = React.useRef(false);
   
   // Update hasEverConnected when we get remote streams
-  useEffect(() => {
+  React.useEffect(() => {
     if (Object.keys(remoteStreams).length > 0) {
       hasEverConnected.current = true;
     }
   }, [remoteStreams]);
   
   // Reset hasEverConnected when call ends
-  useEffect(() => {
+  React.useEffect(() => {
     if (!isInCall) {
       hasEverConnected.current = false;
     }
   }, [isInCall]);
 
   // Auto-end call when all other participants leave (only after we've connected at least once)
-  useEffect(() => {
+  React.useEffect(() => {
     if (!isInCall) return;
     
     // Don't auto-end if we've never had a connection yet (still waiting for others to join)
@@ -605,18 +724,21 @@ export function useWebRTC(userId) {
     // If we're in a call but no other participants, and we have no remote streams, end the call
     if (othersInCall.length === 0 && Object.keys(remoteStreams).length === 0 && callState === 'connected') {
       console.log('All other participants left, ending call');
-      // Small delay to ensure this isn't triggered during transient states
-      const timer = setTimeout(() => {
+      
+      if (cleanupTimersRef.current.autoEnd) {
+        clearTimeout(cleanupTimersRef.current.autoEnd);
+      }
+      
+      cleanupTimersRef.current.autoEnd = setTimeout(() => {
+        // Only proceed if still in the same state (user didn't join a new call in the meantime)
         const roomId = callRoomIdRef.current;
         if (roomId) {
           wsService.send('call.leave', { room_id: roomId });
         }
-        const stream = localStreamRef.current;
-        if (stream) {
-          stream.getTracks().forEach(track => track.stop());
-        }
-        setLocalStream(null);
-        localStreamRef.current = null;
+        
+        // Use our cleanup helper
+        cleanupMedia();
+        
         peerConnections.current.forEach((pc, peerId) => {
           pc.close();
           peerConnections.current.delete(peerId);
@@ -628,12 +750,18 @@ export function useWebRTC(userId) {
         setRemoteStreams({});
         setCallState('idle');
       }, 1000);
-      return () => clearTimeout(timer);
+      
+      return () => {
+        if (cleanupTimersRef.current.autoEnd) {
+          clearTimeout(cleanupTimersRef.current.autoEnd);
+          cleanupTimersRef.current.autoEnd = null;
+        }
+      };
     }
-  }, [isInCall, participants, userId, remoteStreams, callState]);
+  }, [isInCall, participants, userId, remoteStreams, callState, cleanupMedia]);
 
   // Handle incoming offer - CRITICAL: This is where first user receives offer from second user
-  useEffect(() => {
+  React.useEffect(() => {
     const handleOffer = async (payload) => {
       console.log('=== RECEIVED OFFER ===');
       console.log('From:', payload.from_id, payload.from_name);
@@ -684,7 +812,7 @@ export function useWebRTC(userId) {
   }, [createPeerConnection]);
 
   // Handle incoming answer
-  useEffect(() => {
+  React.useEffect(() => {
     const handleAnswer = async (payload) => {
       console.log('Received answer from:', payload.from_id);
       
@@ -707,7 +835,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // Handle incoming ICE candidate
-  useEffect(() => {
+  React.useEffect(() => {
     const handleIceCandidate = async (payload) => {
       const pc = peerConnections.current.get(payload.from_id);
       const candidate = JSON.parse(payload.candidate);
@@ -732,7 +860,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // SFU: Handle offer from server
-  useEffect(() => {
+  React.useEffect(() => {
     const handleSFUOffer = async (payload) => {
       console.log('Received SFU offer');
       
@@ -769,7 +897,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // SFU: Handle ICE candidate from server
-  useEffect(() => {
+  React.useEffect(() => {
     const handleSFUCandidate = async (payload) => {
       const pc = sfuConnection.current;
       const candidate = JSON.parse(payload.candidate);
@@ -791,7 +919,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // SFU: Handle track info updates (maps streams to user info)
-  useEffect(() => {
+  React.useEffect(() => {
     const handleSFUTracks = (payload) => {
       console.log('SFU tracks update:', payload);
       
@@ -821,7 +949,7 @@ export function useWebRTC(userId) {
   }, []);
 
   // Handle incoming call notification
-  useEffect(() => {
+  React.useEffect(() => {
     const handleIncomingCall = (payload) => {
       console.log('Incoming call:', payload);
       
@@ -863,38 +991,65 @@ export function useWebRTC(userId) {
       if (isInCall && callRoomIdRef.current === payload.room_id) {
         console.log('Our active call was ended by server/other participant');
         setCallState('ended');
-        // Delay the cleanup to show the "ended" state
-        setTimeout(() => leaveCall(), 1500);
+        
+        // Use ref to track this timeout so it can be cancelled if a new call starts
+        if (cleanupTimersRef.current.endedDelay) {
+          clearTimeout(cleanupTimersRef.current.endedDelay);
+        }
+        
+        cleanupTimersRef.current.endedDelay = setTimeout(() => leaveCall(), 1500);
+      }
+    };
+
+    const handleCallDeclined = (payload) => {
+      console.log('Call declined event received:', payload);
+      // If we are the caller (in call) and the call was declined
+      if (isInCall && callRoomIdRef.current === payload.conversation_id) {
+         console.log('Our call was declined by', payload.decliner_name);
+         setCallState('ended');
+         
+         // Use ref to track this timeout so it can be cancelled
+         if (cleanupTimersRef.current.endedDelay) {
+           clearTimeout(cleanupTimersRef.current.endedDelay);
+         }
+         
+         cleanupTimersRef.current.endedDelay = setTimeout(() => leaveCall(), 1000); 
       }
     };
 
     const unsubIncoming = wsService.on('call.incoming', handleIncomingCall);
     const unsubCancelled = wsService.on('call.cancelled', handleCallCancelled);
     const unsubEnded = wsService.on('call.ended', handleCallEnded);
+    const unsubDeclined = wsService.on('call.declined', handleCallDeclined);
 
     return () => {
       unsubIncoming();
       unsubCancelled();
       unsubEnded();
+      unsubDeclined();
     };
   }, [isInCall, incomingCall, leaveCall]);
 
   // Accept incoming call
-  const acceptCall = useCallback(async (withVideo = true) => {
+  const acceptCall = React.useCallback(async (withVideo = true) => {
     if (!incomingCall) return;
+
+    // Optimistically clear the incoming call UI to prevent double-clicks
+    const callInfo = { ...incomingCall };
+    setIncomingCall(null);
 
     try {
       // Join the call room
-      await joinCall(incomingCall.conversationId, withVideo);
-      setIncomingCall(null);
+      await joinCall(callInfo.conversationId, withVideo);
     } catch (err) {
       console.error('Failed to accept call:', err);
       setError(err.message);
+      // We don't restore incomingCall here to prevent getting stuck in a loop if media fails
     }
   }, [incomingCall, joinCall]);
 
   // Decline incoming call
-  const declineCall = useCallback(() => {
+  const declineCall = React.useCallback(() => {
     if (!incomingCall) return;
 
     // Send decline event
@@ -907,7 +1062,7 @@ export function useWebRTC(userId) {
   }, [incomingCall]);
 
   // Cleanup on unmount
-  useEffect(() => {
+  React.useEffect(() => {
     // Copy refs to local variables for cleanup
     const peerConns = peerConnections.current;
     const sfuConn = sfuConnection.current;

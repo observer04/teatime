@@ -1,0 +1,103 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: teatime-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-teatime}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-teatime}
+      POSTGRES_DB: ${POSTGRES_DB:-teatime}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teatime -d teatime"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ghcr.io/observer04/teatime/backend:latest
+    container_name: teatime-backend
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+      - SERVER_ADDR=0.0.0.0:8080
+      - DATABASE_URL=postgres://${POSTGRES_USER:-teatime}:${POSTGRES_PASSWORD:-teatime}@postgres:5432/${POSTGRES_DB:-teatime}?sslmode=disable
+      - APP_BASE_URL=https://app.ommprakash.cloud
+      - API_BASE_URL=https://api.ommprakash.cloud
+      # Google OAuth Configuration
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
+      - OAUTH_ENABLED=${OAUTH_ENABLED:-true}
+      # WebRTC/TURN configuration
+      - ICE_STUN_URLS=stun:stun.l.google.com:19302,stun:turn.ommprakash.cloud:3478
+      - ICE_TURN_URLS=turn:turn.ommprakash.cloud:3478
+      - TURN_USERNAME=${TURN_USERNAME:-teatime}
+      - TURN_PASSWORD=${TURN_PASSWORD:-teatime-turn-secret}
+      # R2 Configuration
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+      - R2_BUCKET=${R2_BUCKET:-teatime}
+      # PubSub Configuration (optional - use redis for multi-instance)
+      - PUBSUB_TYPE=${PUBSUB_TYPE:-memory}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    image: ghcr.io/observer04/teatime/frontend:latest
+    container_name: teatime-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: teatime-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    container_name: teatime-coturn
+    restart: unless-stopped
+    network_mode: "host" # Use host networking for TURN performance/port range
+    volumes:
+      - ./infra/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+
+  # ============================================================================
+  # Redis (optional - for horizontal scaling with multiple backend instances)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: teatime-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - redis  # Only start with: docker compose -f docker-compose.prod.yml --profile redis up
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+  redis_data:

@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import wsService from '../services/websocket';
 
 export function useWebSocket(token) {
-  const [isConnected, setIsConnected] = useState(false);
-  const [messages, setMessages] = useState({});
+  const [isConnected, setIsConnected] = React.useState(false);
+  const [messages, setMessages] = React.useState({});
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!token) return;
 
     wsService.connect(token);
@@ -82,7 +82,7 @@ export function useWebSocket(token) {
     };
   }, [token]);
 
-  const sendMessage = useCallback((conversationId, bodyText, attachmentId = null) => {
+  const sendMessage = React.useCallback((conversationId, bodyText, attachmentId = null) => {
     const payload = {
       conversation_id: conversationId,
       body_text: bodyText || ''
@@ -95,24 +95,24 @@ export function useWebSocket(token) {
     wsService.send('message.send', payload);
   }, []);
 
-  const joinRoom = useCallback((conversationId) => {
+  const joinRoom = React.useCallback((conversationId) => {
     wsService.send('room.join', { conversation_id: conversationId });
   }, []);
 
-  const leaveRoom = useCallback((conversationId) => {
+  const leaveRoom = React.useCallback((conversationId) => {
     wsService.send('room.leave', { conversation_id: conversationId });
   }, []);
 
-  const startTyping = useCallback((conversationId) => {
+  const startTyping = React.useCallback((conversationId) => {
     wsService.send('typing.start', { conversation_id: conversationId });
   }, []);
 
-  const stopTyping = useCallback((conversationId) => {
+  const stopTyping = React.useCallback((conversationId) => {
     wsService.send('typing.stop', { conversation_id: conversationId });
   }, []);
 
   // Mark a message as read
-  const markAsRead = useCallback((messageId) => {
+  const markAsRead = React.useCallback((messageId) => {
     wsService.send('receipt.read', { message_id: messageId });
   }, []);
 

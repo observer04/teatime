@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React from 'react';
 import { 
   X, 
   Mic, 
@@ -17,12 +17,20 @@ import {
  * Remote video tile for main display (large)
  */
 function RemoteVideoTile({ stream, username, isMuted, isVideoOff }) {
-  const videoRef = useRef(null);
+  const videoRef = React.useRef(null);
 
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+  React.useEffect(() => {
+    const videoEl = videoRef.current;
+    if (videoEl && stream) {
+      videoEl.srcObject = stream;
+      // Explicitly attempt to play to handle autoplay policies
+      videoEl.play().catch(e => console.error("Error auto-playing remote video:", e));
     }
+    return () => {
+      if (videoEl) {
+        videoEl.srcObject = null;
+      }
+    };
   }, [stream]);
 
   return (
@@ -61,20 +69,28 @@ function RemoteVideoTile({ stream, username, isMuted, isVideoOff }) {
  * Local video Picture-in-Picture component (small, draggable)
  */
 function LocalVideoPiP({ stream, isMuted, isVideoOff }) {
-  const videoRef = useRef(null);
-  const pipRef = useRef(null);
-  const [position, setPosition] = useState({ x: 16, y: 80 }); // Top-right with padding
-  const [isDragging, setIsDragging] = useState(false);
-  const dragOffset = useRef({ x: 0, y: 0 });
+  const videoRef = React.useRef(null);
+  const pipRef = React.useRef(null);
+  const [position, setPosition] = React.useState({ x: 16, y: 80 }); // Top-right with padding
+  const [isDragging, setIsDragging] = React.useState(false);
+  const dragOffset = React.useRef({ x: 0, y: 0 });
 
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+  React.useEffect(() => {
+    const videoEl = videoRef.current;
+    if (videoEl && stream) {
+      videoEl.srcObject = stream;
+      // Local video is muted by default (prop), so autoplay usually works, but good to be explicit
+      videoEl.play().catch(e => console.error("Error auto-playing local video:", e));
     }
+    return () => {
+      if (videoEl) {
+        videoEl.srcObject = null;
+      }
+    };
   }, [stream]);
 
   // Handle drag start
-  const handleDragStart = useCallback((e) => {
+  const handleDragStart = React.useCallback((e) => {
     if (!pipRef.current) return;
     
     const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
@@ -90,7 +106,7 @@ function LocalVideoPiP({ stream, isMuted, isVideoOff }) {
   }, []);
 
   // Handle drag move
-  const handleDragMove = useCallback((e) => {
+  const handleDragMove = React.useCallback((e) => {
     if (!isDragging || !pipRef.current) return;
     
     const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
@@ -114,12 +130,12 @@ function LocalVideoPiP({ stream, isMuted, isVideoOff }) {
   }, [isDragging]);
 
   // Handle drag end
-  const handleDragEnd = useCallback(() => {
+  const handleDragEnd = React.useCallback(() => {
     setIsDragging(false);
   }, []);
 
   // Add/remove event listeners
-  useEffect(() => {
+  React.useEffect(() => {
     if (isDragging) {
       window.addEventListener('mousemove', handleDragMove);
       window.addEventListener('mouseup', handleDragEnd);
@@ -336,8 +352,8 @@ export default function VideoCallModal({
   participants,
   callState
 }) {
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const modalRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const modalRef = React.useRef(null);
 
   // Handle fullscreen
   const toggleFullscreen = async () => {
@@ -351,7 +367,7 @@ export default function VideoCallModal({
   };
 
   // Listen for fullscreen changes
-  useEffect(() => {
+  React.useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
     };
@@ -360,7 +376,7 @@ export default function VideoCallModal({
   }, []);
 
   // Close on escape
-  useEffect(() => {
+  React.useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === 'Escape' && !document.fullscreenElement) {
         onClose?.();
@@ -391,7 +407,7 @@ export default function VideoCallModal({
             <h2 className="text-white font-semibold text-lg">{conversationName}</h2>
             <span className="flex items-center gap-1 px-2 py-1 bg-white/10 rounded-full text-white/70 text-sm">
               <Users className="w-4 h-4" />
-              {(participants?.length || 1) + remoteStreamEntries.length}
+              {participants?.length || (remoteStreamEntries.length + 1)}
             </span>
             {(callState === 'connecting' || callState === 'ringing') && (
               <span className={`px-2 py-1 rounded-full text-sm animate-pulse ${

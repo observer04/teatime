@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import React from 'react';
 
 export function useAuth() {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = React.useState(null);
+  const [token, setToken] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
 
-  useEffect(() => {
+  React.useEffect(() => {
     // Check for stored auth
     const storedToken = localStorage.getItem('token');
     const storedUser = localStorage.getItem('user');

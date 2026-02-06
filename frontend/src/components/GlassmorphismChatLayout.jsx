@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React from 'react';
 import { IconSidebar } from './IconSidebar';
 import { GlassChatSidebar } from './GlassChatSidebar';
 import { GlassChatHeader } from './GlassChatHeader';
@@ -18,9 +18,9 @@ import { useWebRTC } from '../hooks/useWebRTC';
 
 // Custom hook for detecting mobile viewport
 function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(window.innerWidth < breakpoint);
+  const [isMobile, setIsMobile] = React.useState(window.innerWidth < breakpoint);
 
-  useEffect(() => {
+  React.useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < breakpoint);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -30,16 +30,16 @@ function useIsMobile(breakpoint = 768) {
 }
 
 export default function GlassmorphismChatLayout({ user, token, onLogout }) {
-  const [activeTab, setActiveTab] = useState("chats");
-  const [conversations, setConversations] = useState([]);
-  const [currentConversation, setCurrentConversation] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [showNewGroupModal, setShowNewGroupModal] = useState(false);
-  const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [showStarredModal, setShowStarredModal] = useState(false);
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [showMembersPanel, setShowMembersPanel] = useState(false);
-  const [showMobileChat, setShowMobileChat] = useState(false);
+  const [activeTab, setActiveTab] = React.useState("chats");
+  const [conversations, setConversations] = React.useState([]);
+  const [currentConversation, setCurrentConversation] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [showNewGroupModal, setShowNewGroupModal] = React.useState(false);
+  const [showNewChatModal, setShowNewChatModal] = React.useState(false);
+  const [showStarredModal, setShowStarredModal] = React.useState(false);
+  const [showSearchModal, setShowSearchModal] = React.useState(false);
+  const [showMembersPanel, setShowMembersPanel] = React.useState(false);
+  const [showMobileChat, setShowMobileChat] = React.useState(false);
   
   const isMobile = useIsMobile();
 
@@ -70,16 +70,16 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     declineCall
   } = useWebRTC(user.id);
 
-  const [showVideoCall, setShowVideoCall] = useState(false);
+  const [showVideoCall, setShowVideoCall] = React.useState(false);
 
   // Show alert when WebRTC error occurs
-  useEffect(() => {
+  React.useEffect(() => {
     if (webrtcError) {
       alert(`Call Error: ${webrtcError}`);
     }
   }, [webrtcError]);
 
-  useEffect(() => {
+  React.useEffect(() => {
     loadConversations();
   }, []);
 

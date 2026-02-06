@@ -14,6 +14,22 @@ var (
 	ErrNotFound = errors.New("record not found")
 )
 
+// Default timeouts for database operations
+const (
+	DefaultQueryTimeout = 5 * time.Second
+	DefaultTxTimeout    = 10 * time.Second
+)
+
+// WithTimeout creates a context with the default query timeout
+func WithTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, DefaultQueryTimeout)
+}
+
+// WithTxTimeout creates a context with transaction timeout
+func WithTxTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, DefaultTxTimeout)
+}
+
 // DB wraps the connection pool
 type DB struct {
 	Pool *pgxpool.Pool

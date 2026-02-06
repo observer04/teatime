@@ -198,6 +198,8 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleCallAnswer(client, msg.Payload)
 	case webrtc.EventTypeCallICECandidate:
 		h.handleCallICECandidate(client, msg.Payload)
+	case webrtc.EventTypeCallDeclined:
+		h.handleCallDeclined(client, msg.Payload)
 	// SFU group call events
 	case webrtc.EventTypeSFUAnswer:
 		h.handleSFUAnswer(client, msg.Payload)
@@ -609,6 +611,19 @@ func (h *Hub) handleCallICECandidate(client *Client, payload json.RawMessage) {
 	}
 
 	h.callHandler.HandleICECandidate(context.Background(), sigCtx, payload)
+}
+
+func (h *Hub) handleCallDeclined(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.callHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	h.callHandler.HandleDeclined(context.Background(), sigCtx, payload)
 }
 
 func (h *Hub) handleSFUAnswer(client *Client, payload json.RawMessage) {

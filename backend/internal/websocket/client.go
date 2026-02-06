@@ -22,8 +22,8 @@ const (
 	// Send pings to peer with this period (must be less than pongWait)
 	pingPeriod = (pongWait * 9) / 10
 
-	// Maximum message size allowed from peer
-	maxMessageSize = 8192
+	// Maximum message size allowed from peer (64KB for attachment metadata)
+	maxMessageSize = 65536
 )
 
 // Client represents a connected WebSocket client

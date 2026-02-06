@@ -1,0 +1,7 @@
+app.ommprakash.cloud {
+    reverse_proxy frontend:80
+}
+
+api.ommprakash.cloud {
+    reverse_proxy backend:8080
+}

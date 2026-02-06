@@ -79,6 +79,21 @@ func main() {
 	// Initialize auth service
 	authService := auth.NewService(userRepo, tokenService)
 
+	// Initialize OAuth service (optional - only if configured)
+	var oauthService *auth.OAuthService
+	var oauthHandler *api.OAuthHandlers
+	if cfg.OAuthEnabled {
+		oauthService = auth.NewOAuthService(
+			cfg.GoogleClientID,
+			cfg.GoogleClientSecret,
+			cfg.GoogleRedirectURL,
+		)
+		oauthHandler = api.NewOAuthHandlers(oauthService, authService, userRepo, cfg.AppBaseURL)
+		slog.Info("Google OAuth enabled", "redirect_url", cfg.GoogleRedirectURL)
+	} else {
+		slog.Info("Google OAuth not configured - OAuth login disabled")
+	}
+
 	// Initialize R2 storage (optional - skip if not configured)
 	var r2Storage *storage.R2Storage
 	var uploadHandler *api.UploadHandler
@@ -94,8 +109,20 @@ func main() {
 		slog.Warn("R2 storage not configured - file uploads disabled")
 	}
 
-	// Initialize PubSub (in-memory for single instance, swap for Redis in production)
-	ps := pubsub.NewMemoryPubSub()
+	// Initialize PubSub (memory for single instance, Redis for horizontal scaling)
+	var ps pubsub.PubSub
+	if cfg.PubSubType == "redis" && cfg.RedisURL != "" {
+		redisPubSub, err := pubsub.NewRedisPubSub(cfg.RedisURL)
+		if err != nil {
+			slog.Error("failed to connect to Redis for PubSub", "error", err)
+			os.Exit(1)
+		}
+		ps = redisPubSub
+		slog.Info("using Redis PubSub for horizontal scaling")
+	} else {
+		ps = pubsub.NewMemoryPubSub()
+		slog.Info("using in-memory PubSub (single instance mode)")
+	}
 	defer ps.Close()
 
 	// Initialize broadcaster for API handlers to send WebSocket events
@@ -151,6 +178,7 @@ func main() {
 		ConvHandler:    convHandler,
 		CallHandler:    apiCallHandler,
 		UploadHandler:  uploadHandler,
+		OAuthHandler:   oauthHandler,
 		WSHandler:      wsHandler,
 		StaticDir:      staticDir,
 		Logger:         logger,

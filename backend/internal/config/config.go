@@ -41,6 +41,16 @@ type Config struct {
 	R2Bucket          string
 	R2Endpoint        string
 	MaxUploadBytes    int64
+
+	// Redis (for PubSub horizontal scaling)
+	RedisURL   string // e.g., "redis://localhost:6379"
+	PubSubType string // "memory" or "redis"
+
+	// Google OAuth
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string // OAuth callback URL
+	OAuthEnabled       bool   // Feature flag for OAuth
 }
 
 // Load reads configuration from environment variables.
@@ -73,6 +83,16 @@ func Load() (*Config, error) {
 	cfg.R2Bucket = os.Getenv("R2_BUCKET")
 	cfg.R2Endpoint = getEnvOrDefault("R2_ENDPOINT", fmt.Sprintf("https://%s.r2.cloudflarestorage.com", cfg.R2AccountID))
 	cfg.MaxUploadBytes = 100 * 1024 * 1024 // 100MB default
+
+	// Redis / PubSub configuration
+	cfg.RedisURL = os.Getenv("REDIS_URL")
+	cfg.PubSubType = getEnvOrDefault("PUBSUB_TYPE", "memory") // "memory" or "redis"
+
+	// Google OAuth configuration
+	cfg.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")
+	cfg.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
+	cfg.GoogleRedirectURL = getEnvOrDefault("GOOGLE_REDIRECT_URL", cfg.APIBaseURL+"/auth/google/callback")
+	cfg.OAuthEnabled = cfg.GoogleClientID != "" && cfg.GoogleClientSecret != ""
 
 	if err := cfg.validate(); err != nil {
 		return nil, err

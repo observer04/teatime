@@ -228,3 +228,84 @@ func (r *UserRepository) RevokeAllUserTokens(ctx context.Context, userID uuid.UU
 	`, userID)
 	return err
 }
+
+// ============================================================================
+// OAuth Identity Operations
+// ============================================================================
+
+// GetUserByOAuthProvider finds a user by their OAuth provider and provider user ID
+func (r *UserRepository) GetUserByOAuthProvider(ctx context.Context, provider, providerUserID string) (*domain.User, error) {
+	user := &domain.User{}
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT u.id, u.username, u.email, u.display_name, u.avatar_url, u.created_at, u.updated_at
+		FROM users u
+		INNER JOIN oauth_identities oi ON u.id = oi.user_id
+		WHERE oi.provider = $1 AND oi.provider_user_id = $2
+	`, provider, providerUserID).Scan(
+		&user.ID, &user.Username, &user.Email,
+		&user.DisplayName, &user.AvatarURL,
+		&user.CreatedAt, &user.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrUserNotFound
+	}
+	return user, err
+}
+
+// CreateOAuthIdentity links an OAuth provider to an existing user
+func (r *UserRepository) CreateOAuthIdentity(ctx context.Context, userID uuid.UUID, provider, providerUserID string) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		INSERT INTO oauth_identities (user_id, provider, provider_user_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (provider, provider_user_id) DO NOTHING
+	`, userID, provider, providerUserID)
+	return err
+}
+
+// CreateUserWithOAuth creates a new user via OAuth (without password)
+// The user will need to set a username later
+func (r *UserRepository) CreateUserWithOAuth(ctx context.Context, user *domain.User, provider, providerUserID string) error {
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Insert user
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, username, email, display_name, avatar_url)
+		VALUES ($1, $2, $3, $4, $5)
+	`, user.ID, user.Username, user.Email, user.DisplayName, user.AvatarURL)
+	if err != nil {
+		return err
+	}
+
+	// Insert OAuth identity
+	_, err = tx.Exec(ctx, `
+		INSERT INTO oauth_identities (user_id, provider, provider_user_id)
+		VALUES ($1, $2, $3)
+	`, user.ID, provider, providerUserID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// HasOAuthIdentity checks if a user has an OAuth identity linked
+func (r *UserRepository) HasOAuthIdentity(ctx context.Context, userID uuid.UUID, provider string) (bool, error) {
+	var exists bool
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM oauth_identities WHERE user_id = $1 AND provider = $2)
+	`, userID, provider).Scan(&exists)
+	return exists, err
+}
+
+// UpdateUsername updates just the username for a user (for OAuth users setting their username)
+func (r *UserRepository) UpdateUsername(ctx context.Context, userID uuid.UUID, username string) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		UPDATE users SET username = $2, updated_at = NOW() WHERE id = $1
+	`, userID, username)
+	return err
+}
+

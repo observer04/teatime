@@ -1,5 +1,4 @@
 package webrtc
-package webrtc
 
 import (
 	"context"

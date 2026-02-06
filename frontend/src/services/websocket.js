@@ -49,10 +49,19 @@ class WebSocketService {
       this.emit('connection', { status: 'disconnected' });
       
       if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        // Exponential backoff with jitter to prevent thundering herd
+        const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts);
+        const jitter = Math.random() * 1000; // Random 0-1s jitter
+        const delay = Math.min(baseDelay + jitter, 30000); // Cap at 30 seconds
+        
+        console.log(`WebSocket reconnecting in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
         setTimeout(() => {
           this.reconnectAttempts++;
           this.connect(token);
-        }, this.reconnectDelay);
+        }, delay);
+      } else {
+        console.warn('WebSocket max reconnect attempts reached');
+        this.emit('connection', { status: 'failed' });
       }
     };
 
