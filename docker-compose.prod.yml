@@ -23,12 +23,12 @@ services:
       - APP_ENV=production
       - SERVER_ADDR=0.0.0.0:8080
       - DATABASE_URL=postgres://${POSTGRES_USER:-teatime}:${POSTGRES_PASSWORD:-teatime}@postgres:5432/${POSTGRES_DB:-teatime}?sslmode=disable
-      - APP_BASE_URL=https://app.ommprakash.cloud
-      - API_BASE_URL=https://api.ommprakash.cloud
+      - APP_BASE_URL=https://teatime.ommprakash.cloud
+      - API_BASE_URL=https://teatime.ommprakash.cloud/api
       # Google OAuth Configuration
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
+      - GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL:-https://teatime.ommprakash.cloud/api/auth/google/callback}
       - OAUTH_ENABLED=${OAUTH_ENABLED:-true}
       # WebRTC/TURN configuration
       - ICE_STUN_URLS=stun:stun.l.google.com:19302,stun:turn.ommprakash.cloud:3478

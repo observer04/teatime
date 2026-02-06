@@ -1,7 +1,16 @@
-app.ommprakash.cloud {
-    reverse_proxy frontend:80
-}
+teatime.ommprakash.cloud {
+    # Proxy API requests (strip /api prefix)
+    handle_path /api* {
+        reverse_proxy backend:8080
+    }
 
-api.ommprakash.cloud {
-    reverse_proxy backend:8080
+    # Proxy WebSocket (no prefix to strip)
+    handle /ws {
+        reverse_proxy backend:8080
+    }
+
+    # Everything else to frontend
+    handle {
+        reverse_proxy frontend:80
+    }
 }

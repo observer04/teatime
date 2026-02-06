@@ -4,14 +4,14 @@ if (typeof window !== 'undefined') {
   const hostname = window.location.hostname;
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   
-  // If accessing via app.ommprakash.cloud, use the api subdomain
-  if (hostname === 'app.ommprakash.cloud') {
-    WS_BASE = 'wss://api.ommprakash.cloud/ws';
+  // If accessing via the production subdomain, use the /ws path on same origin
+  if (hostname === 'teatime.ommprakash.cloud') {
+    WS_BASE = `${protocol}://${hostname}/ws`;
   } else if (_RAW_WS_BASE) {
     // For localhost or other hostnames, use the configured base
-    // Replace localhost with current hostname for WiFi/network access
     WS_BASE = _RAW_WS_BASE.replace('localhost', hostname).replace('127.0.0.1', hostname).replace('0.0.0.0', hostname);
   } else {
+    // Fallback for dev environments
     WS_BASE = `${protocol}://${hostname}:8080/ws`;
   }
 } else {

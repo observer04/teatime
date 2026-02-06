@@ -60,9 +60,9 @@ func corsMiddleware(cfg *config.Config) Middleware {
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
 				w.Header().Set("Access-Control-Max-Age", "86400")
 			} else {
-				// In production, only allow configured origin or specific production domain
+				// In production, only allow configured origin (teatime.ommprakash.cloud)
 				allowedOrigin := cfg.AppBaseURL
-				if origin == allowedOrigin || origin == "https://app.ommprakash.cloud" {
+				if origin == allowedOrigin || origin == "https://teatime.ommprakash.cloud" {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
 					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

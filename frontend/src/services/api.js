@@ -5,24 +5,22 @@ console.log('[API Config] Current hostname:', typeof window !== 'undefined' ? wi
 let API_BASE;
 if (typeof window !== 'undefined') {
   const hostname = window.location.hostname;
-  const protocol = window.location.protocol;
   
-  // If accessing via app.ommprakash.cloud, use the api subdomain
-  if (hostname === 'app.ommprakash.cloud') {
-    API_BASE = 'https://api.ommprakash.cloud';
-    console.log('[API Config] Using tunnel API endpoint');
+  // If accessing via the production subdomain, use the /api path on same origin
+  if (hostname === 'teatime.ommprakash.cloud') {
+    API_BASE = window.location.origin + '/api';
+    console.log('[API Config] Using production relative API:', API_BASE);
   } else if (_RAW_API_BASE) {
     // For localhost or other hostnames, use the configured base
-    // Replace localhost with current hostname for WiFi/network access
     if (_RAW_API_BASE.includes('localhost') || _RAW_API_BASE.includes('127.0.0.1') || _RAW_API_BASE.includes('0.0.0.0')) {
       API_BASE = _RAW_API_BASE.replace('localhost', hostname).replace('127.0.0.1', hostname).replace('0.0.0.0', hostname);
-      console.log('[API Config] Using hostname-replaced API:', API_BASE);
     } else {
       API_BASE = _RAW_API_BASE;
     }
   } else {
-    console.warn('[API Config] VITE_API_BASE is undefined, using fallback');
-    API_BASE = `${protocol}//${hostname}:8080`;
+    // Fallback for dev environments
+    API_BASE = window.location.origin.replace(':5173', ':8080');
+    console.warn('[API Config] VITE_API_BASE is undefined, falling back to:', API_BASE);
   }
 } else {
   API_BASE = _RAW_API_BASE || 'http://localhost:8080';
