@@ -102,15 +102,19 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: azureuser
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script_stop: true
-          # Increase timeout for pull
           command_timeout: 30m
           script: |
+            set -e
+            
             cd ~/teatime
             
             echo "Current files:"
             ls -la
             ls -la infra/ || echo "Infra dir missing"
+            
+            echo "Docker version:"
+            docker version || echo "Docker not installed"
+            docker compose version || echo "Docker compose not installed"
             
             echo "Generating .env..."
             cat > .env << 'ENVEOF'
@@ -118,16 +122,48 @@ jobs:
             ENVEOF
             
             echo "Login to GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            if ! echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin; then
+              echo "ERROR: Docker login failed"
+              exit 1
+            fi
             
-            echo "Pulling images..."
-            docker compose -f docker-compose.prod.yml pull
+            echo "Validating compose file..."
+            if ! docker compose -f docker-compose.prod.yml config > /dev/null; then
+              echo "ERROR: Invalid docker-compose.prod.yml"
+              docker compose -f docker-compose.prod.yml config
+              exit 1
+            fi
+            
+            echo "Testing image access..."
+            if ! docker pull ghcr.io/${{ github.repository }}/backend:latest; then
+              echo "ERROR: Cannot pull backend image - check repository visibility and token permissions"
+              exit 1
+            fi
+            if ! docker pull ghcr.io/${{ github.repository }}/frontend:latest; then
+              echo "ERROR: Cannot pull frontend image - check repository visibility and token permissions"
+              exit 1
+            fi
+            
+            echo "Pulling all compose images..."
+            if ! docker compose -f docker-compose.prod.yml pull; then
+              echo "ERROR: Failed to pull images via compose"
+              exit 1
+            fi
             
             echo "Stopping old services..."
             docker compose -f docker-compose.prod.yml down || true
             
             echo "Starting services..."
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            if ! docker compose -f docker-compose.prod.yml up -d --remove-orphans; then
+              echo "ERROR: Failed to start services"
+              docker compose -f docker-compose.prod.yml logs
+              exit 1
+            fi
+            
+            echo "Services status:"
+            docker compose -f docker-compose.prod.yml ps
             
             echo "Pruning..."
             docker system prune -f
+            
+            echo "Deployment complete!"
