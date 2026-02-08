@@ -77,6 +77,15 @@ jobs:
           echo "Waiting for VM to be accessible at ${{ secrets.DEPLOY_HOST }}..."
           timeout 300 bash -c 'until nc -z -v -w 2 ${{ secrets.DEPLOY_HOST }} 22; do echo "Retrying connection..."; sleep 5; done'
 
+      - name: Prepare Directories
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: azureuser
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            mkdir -p ~/teatime/infra
+
       - name: Copy files via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -85,7 +94,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "docker-compose.prod.yml,infra/Caddyfile,infra/turnserver.conf"
           target: "~/teatime"
-          
+          force_upload: true
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -93,22 +103,31 @@ jobs:
           username: azureuser
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
+          # Increase timeout for pull
+          command_timeout: 30m
           script: |
             cd ~/teatime
             
-            # Create .env from secret
+            echo "Current files:"
+            ls -la
+            ls -la infra/ || echo "Infra dir missing"
+            
+            echo "Generating .env..."
             cat > .env << 'ENVEOF'
             ${{ secrets.ENV_FILE }}
             ENVEOF
             
-            # Login to GHCR
+            echo "Login to GHCR..."
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            # Pull new images
+            echo "Pulling images..."
             docker compose -f docker-compose.prod.yml pull
             
-            # Restart services
+            echo "Stopping old services..."
+            docker compose -f docker-compose.prod.yml down || true
+            
+            echo "Starting services..."
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
             
-            # Prune unused images
+            echo "Pruning..."
             docker system prune -f
