@@ -58,7 +58,7 @@ function CallDropdown({ isOpen, onClose, onVideoCall, onAudioCall, buttonRef }) 
   );
 }
 
-export function GlassChatHeader({ name, status, avatar, isChannel, memberCount, onSearch, onBack, onMembersClick, onVideoCall, onAudioCall }) {
+export function GlassChatHeader({ name, status: _status, avatar, isChannel, memberCount, onSearch, onBack, onMembersClick, onVideoCall, onAudioCall }) {
   const [showCallDropdown, setShowCallDropdown] = useState(false);
   const callDropdownButtonRef = useRef(null);
 

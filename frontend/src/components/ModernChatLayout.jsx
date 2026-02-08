@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { ChatSidebar } from './ChatSidebarIntegrated';
 import { ChatHeader } from './chat-header';
 import { ChatMessages } from './chat-messages';
@@ -17,8 +17,8 @@ export default function ModernChatLayout({ user, token, onLogout }) {
     setMessages,
     sendMessage,
     joinRoom,
-    startTyping,
-    stopTyping
+    startTyping: _startTyping,
+    stopTyping: _stopTyping
   } = useWebSocket(token);
 
   useEffect(() => {

@@ -33,7 +33,7 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
   const [activeTab, setActiveTab] = React.useState("chats");
   const [conversations, setConversations] = React.useState([]);
   const [currentConversation, setCurrentConversation] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
+  const [_loading, setLoading] = React.useState(true);
   const [showNewGroupModal, setShowNewGroupModal] = React.useState(false);
   const [showNewChatModal, setShowNewChatModal] = React.useState(false);
   const [showStarredModal, setShowStarredModal] = React.useState(false);
@@ -272,7 +272,7 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
           <div className="w-80 border-r border-border">
             <CallsTab
               currentUserId={user.id}
-              onStartCall={(conversationId, callType) => {
+              onStartCall={(conversationId, _callType) => {
                 // Find the conversation and start a call
                 const conv = conversations.find(c => c.id === conversationId);
                 if (conv) {
@@ -370,7 +370,7 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
         onClose={() => setShowMembersPanel(false)}
         conversation={currentConversation}
         currentUserId={user.id}
-        onMemberAdded={(member) => {
+        onMemberAdded={(_member) => {
           // Update member count in current conversation
           if (currentConversation) {
             setCurrentConversation(prev => ({

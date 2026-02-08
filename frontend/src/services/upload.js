@@ -96,7 +96,7 @@ export class UploadService {
         if (error.details) {
           console.error('Error details:', error.details)
         }
-      } catch (e) {
+      } catch (_e) {
         errorMessage = text || `Upload failed with status ${response.status}`
       }
       throw new Error(errorMessage)
@@ -124,7 +124,7 @@ export class UploadService {
       try {
         const error = JSON.parse(text)
         errorMessage = error.error || error.message || errorMessage
-      } catch (e) {
+      } catch (_e) {
         errorMessage = text || `Request failed with status ${response.status}`
       }
       throw new Error(errorMessage)

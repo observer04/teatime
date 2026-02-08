@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { Phone, PhoneOff, Video, VideoOff, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
@@ -14,8 +14,6 @@ export function IncomingCallModal({
   onAccept,
   onDecline
 }) {
-  const audioRef = useRef(null);
-
   // Play ringtone when call comes in
   useEffect(() => {
     if (isOpen) {
