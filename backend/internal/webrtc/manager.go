@@ -81,7 +81,6 @@ type Room struct {
 	CallID       uuid.UUID `json:"call_id"` // Reference to call_logs entry
 	Participants map[uuid.UUID]*Participant
 	mu           sync.RWMutex
-	createdAt    int64
 }
 
 // NewRoom creates a new call room
@@ -221,7 +220,7 @@ func (m *Manager) JoinCall(ctx context.Context, roomID, userID uuid.UUID, userna
 			Type:    EventTypeCallParticipantJoined,
 			Payload: payloadBytes,
 		}
-		m.pubsub.Publish(ctx, msg.Topic, msg)
+		_ = m.pubsub.Publish(ctx, msg.Topic, msg)
 	}
 
 	m.logger.Info("user joined call", "room_id", roomID, "user_id", userID)
@@ -260,7 +259,7 @@ func (m *Manager) LeaveCall(ctx context.Context, roomID, userID uuid.UUID, usern
 			Type:    EventTypeCallParticipantLeft,
 			Payload: payloadBytes,
 		}
-		m.pubsub.Publish(ctx, msg.Topic, msg)
+		_ = m.pubsub.Publish(ctx, msg.Topic, msg)
 	}
 
 	// Clean up empty rooms

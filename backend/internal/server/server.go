@@ -70,7 +70,7 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	// Ready check - verifies DB connectivity
@@ -78,12 +78,12 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 		if err := deps.DB.Health(r.Context()); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"status":"not ready","error":"database unavailable"}`))
+			_, _ = w.Write([]byte(`{"status":"not ready","error":"database unavailable"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ready"}`))
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 
 	// =========================================================================

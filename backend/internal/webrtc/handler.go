@@ -100,7 +100,7 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 			h.logger.Error("failed to create call log", "error", err)
 		} else {
 			// Add initiator as participant
-			h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
+			_ = h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
 
 			// Store call ID in room for later reference
 			room.SetCallID(callLog.ID)
@@ -110,11 +110,11 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		}
 	} else if existingCallID != uuid.Nil && h.callRepo != nil {
 		// Joining existing call - add as participant and start call if needed
-		h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
+		_ = h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
 
 		// If this is the second person, mark call as started
 		if room.ParticipantCount() == 2 {
-			h.callRepo.StartCall(ctx, existingCallID)
+			_ = h.callRepo.StartCall(ctx, existingCallID)
 		}
 	}
 
@@ -216,7 +216,7 @@ func (h *CallHandler) HandleLeave(ctx context.Context, sigCtx *SignalingContext,
 	// If the room was deleted (became empty), end the call in the database
 	if room != nil && h.manager.GetRoom(roomID) == nil && callID != uuid.Nil && h.callRepo != nil {
 		h.logger.Info("ending call in database", "call_id", callID)
-		h.callRepo.EndCall(ctx, callID)
+		_ = h.callRepo.EndCall(ctx, callID)
 	}
 
 	return nil

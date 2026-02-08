@@ -106,7 +106,7 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, code string) (*GoogleUs
 		s.logger.Error("failed to fetch user info", "error", err)
 		return nil, fmt.Errorf("failed to fetch user info: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

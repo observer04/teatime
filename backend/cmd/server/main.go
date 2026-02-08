@@ -123,7 +123,7 @@ func main() {
 		ps = pubsub.NewMemoryPubSub()
 		slog.Info("using in-memory PubSub (single instance mode)")
 	}
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	// Initialize broadcaster for API handlers to send WebSocket events
 	broadcaster := websocket.NewPubSubBroadcaster(ps)

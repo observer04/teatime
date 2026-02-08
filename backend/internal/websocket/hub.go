@@ -109,7 +109,7 @@ func (h *Hub) handleUnregister(client *Client) {
 	// Cleanup user subscription
 	client.mu.Lock()
 	if client.userSub != nil {
-		client.userSub.Unsubscribe()
+		_ = client.userSub.Unsubscribe()
 		client.userSub = nil
 	}
 	client.mu.Unlock()
@@ -154,7 +154,7 @@ func (h *Hub) handleUnregister(client *Client) {
 		for _, roomID := range roomsForCallCleanup {
 			// Attempt to leave any active calls in rooms the user was in
 			ctx := context.Background()
-			h.callHandler.HandleLeave(ctx, &webrtc.SignalingContext{
+			_ = h.callHandler.HandleLeave(ctx, &webrtc.SignalingContext{
 				UserID:   userID,
 				Username: username,
 			}, json.RawMessage(`{"room_id":"`+roomID.String()+`"}`))
@@ -240,7 +240,7 @@ func (h *Hub) handleAuth(client *Client, payload json.RawMessage) {
 		UserID:   claims.UserID,
 		Username: claims.Username,
 	})
-	client.Send(msg)
+	_ = client.Send(msg)
 
 	h.logger.Info("client authenticated", "user_id", claims.UserID, "username", claims.Username)
 
@@ -538,7 +538,7 @@ func (h *Hub) handleCallJoin(client *Client, payload json.RawMessage) {
 
 	// Send config back to client
 	msg, _ := NewMessage(webrtc.EventTypeCallConfig, config)
-	client.Send(msg)
+	_ = client.Send(msg)
 }
 
 func (h *Hub) handleCallLeave(client *Client, payload json.RawMessage) {
@@ -551,7 +551,7 @@ func (h *Hub) handleCallLeave(client *Client, payload json.RawMessage) {
 		Username: client.Username(),
 	}
 
-	h.callHandler.HandleLeave(context.Background(), sigCtx, payload)
+	_ = h.callHandler.HandleLeave(context.Background(), sigCtx, payload)
 }
 
 func (h *Hub) handleCallOffer(client *Client, payload json.RawMessage) {
@@ -610,7 +610,7 @@ func (h *Hub) handleCallICECandidate(client *Client, payload json.RawMessage) {
 		Username: client.Username(),
 	}
 
-	h.callHandler.HandleICECandidate(context.Background(), sigCtx, payload)
+	_ = h.callHandler.HandleICECandidate(context.Background(), sigCtx, payload)
 }
 
 func (h *Hub) handleCallDeclined(client *Client, payload json.RawMessage) {
@@ -623,7 +623,7 @@ func (h *Hub) handleCallDeclined(client *Client, payload json.RawMessage) {
 		Username: client.Username(),
 	}
 
-	h.callHandler.HandleDeclined(context.Background(), sigCtx, payload)
+	_ = h.callHandler.HandleDeclined(context.Background(), sigCtx, payload)
 }
 
 func (h *Hub) handleSFUAnswer(client *Client, payload json.RawMessage) {
@@ -659,7 +659,7 @@ func (h *Hub) handleSFUCandidate(client *Client, payload json.RawMessage) {
 		Username: client.Username(),
 	}
 
-	h.sfuHandler.HandleSFUCandidate(context.Background(), sigCtx, payload)
+	_ = h.sfuHandler.HandleSFUCandidate(context.Background(), sigCtx, payload)
 }
 
 // BroadcastToRoom sends a message to all clients in a room via PubSub
@@ -706,7 +706,7 @@ func (h *Hub) BroadcastToRoomExcept(roomID uuid.UUID, except *Client, eventType 
 	}
 
 	for _, client := range clients {
-		client.Send(msg)
+		_ = client.Send(msg)
 	}
 }
 
@@ -761,7 +761,7 @@ func (h *Hub) unsubscribeFromRoom(roomID uuid.UUID) {
 	}
 
 	if sub, ok := h.roomSubs[roomID]; ok {
-		sub.Unsubscribe()
+		_ = sub.Unsubscribe()
 		delete(h.roomSubs, roomID)
 	}
 }
@@ -788,7 +788,7 @@ func (h *Hub) deliverToRoom(roomID uuid.UUID, psMsg *pubsub.Message) {
 	}
 
 	for _, client := range clients {
-		client.Send(msg)
+		_ = client.Send(msg)
 	}
 }
 
@@ -804,7 +804,7 @@ func (h *Hub) subscribeUserToEvents(client *Client, userID uuid.UUID) {
 			Payload:   msg.Payload,
 			Timestamp: time.Now(),
 		}
-		client.Send(wsMsg)
+		_ = client.Send(wsMsg)
 		h.logger.Info("sent message to client", "user_id", userID, "type", msg.Type)
 	})
 	if err != nil {

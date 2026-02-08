@@ -35,7 +35,7 @@ type redisSubscription struct {
 func (s *redisSubscription) Unsubscribe() error {
 	s.cancel()
 	if s.pubsub != nil {
-		s.pubsub.Close()
+		_ = s.pubsub.Close()
 	}
 	s.ps.removeSub(s.id)
 	return nil
@@ -114,7 +114,7 @@ func (ps *RedisPubSub) Subscribe(ctx context.Context, topic string, handler Hand
 	_, err := redisPubSub.Receive(ctx)
 	if err != nil {
 		ps.mu.Unlock()
-		redisPubSub.Close()
+		_ = redisPubSub.Close()
 		return nil, fmt.Errorf("failed to subscribe to redis channel: %w", err)
 	}
 
@@ -189,7 +189,7 @@ func (ps *RedisPubSub) Close() error {
 	for _, sub := range ps.subscriptions {
 		sub.cancel()
 		if sub.pubsub != nil {
-			sub.pubsub.Close()
+			_ = sub.pubsub.Close()
 		}
 	}
 	ps.subscriptions = make(map[uint64]*redisSubscription)

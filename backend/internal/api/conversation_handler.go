@@ -1212,7 +1212,7 @@ func (h *ConversationHandler) MarkConversationRead(w http.ResponseWriter, r *htt
 	var input struct {
 		MessageID string `json:"message_id"`
 	}
-	json.NewDecoder(r.Body).Decode(&input)
+	_ = json.NewDecoder(r.Body).Decode(&input)
 
 	var messageID *uuid.UUID
 	if input.MessageID != "" {

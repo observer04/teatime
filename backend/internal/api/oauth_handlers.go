@@ -217,7 +217,7 @@ func (h *OAuthHandlers) generateTempUsername(name string) string {
 
 	// Add random suffix to ensure uniqueness
 	suffix := make([]byte, 4)
-	rand.Read(suffix)
+	_, _ = rand.Read(suffix)
 	return fmt.Sprintf("%s_%s", base, hex.EncodeToString(suffix))
 }
 

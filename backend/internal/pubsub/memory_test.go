@@ -11,7 +11,7 @@ import (
 
 func TestMemoryPubSub_PublishSubscribe(t *testing.T) {
 	ps := NewMemoryPubSub()
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	topic := "test-topic"
 	received := make(chan *Message, 1)
@@ -23,7 +23,7 @@ func TestMemoryPubSub_PublishSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
-	defer sub.Unsubscribe()
+	defer func() { _ = sub.Unsubscribe() }()
 
 	// Publish
 	payload, _ := json.Marshal(map[string]string{"test": "data"})
@@ -51,7 +51,7 @@ func TestMemoryPubSub_PublishSubscribe(t *testing.T) {
 
 func TestMemoryPubSub_MultipleSubscribers(t *testing.T) {
 	ps := NewMemoryPubSub()
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	topic := "multi-sub"
 	var count atomic.Int32
@@ -67,12 +67,12 @@ func TestMemoryPubSub_MultipleSubscribers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Subscribe %d failed: %v", i, err)
 		}
-		defer sub.Unsubscribe()
+		defer func() { _ = sub.Unsubscribe() }()
 	}
 
 	// Publish one message
 	msg := &Message{Topic: topic, Type: "test"}
-	ps.Publish(context.Background(), topic, msg)
+	_ = ps.Publish(context.Background(), topic, msg)
 
 	// Wait with timeout
 	done := make(chan struct{})
@@ -93,7 +93,7 @@ func TestMemoryPubSub_MultipleSubscribers(t *testing.T) {
 
 func TestMemoryPubSub_Unsubscribe(t *testing.T) {
 	ps := NewMemoryPubSub()
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	topic := "unsub-test"
 	received := make(chan struct{}, 10)
@@ -103,7 +103,7 @@ func TestMemoryPubSub_Unsubscribe(t *testing.T) {
 	})
 
 	// First publish should deliver
-	ps.Publish(context.Background(), topic, &Message{Topic: topic, Type: "test"})
+	_ = ps.Publish(context.Background(), topic, &Message{Topic: topic, Type: "test"})
 	select {
 	case <-received:
 		// ok
@@ -112,13 +112,13 @@ func TestMemoryPubSub_Unsubscribe(t *testing.T) {
 	}
 
 	// Unsubscribe
-	sub.Unsubscribe()
+	_ = sub.Unsubscribe()
 
 	// Give goroutines time to complete
 	time.Sleep(50 * time.Millisecond)
 
 	// Second publish should not deliver
-	ps.Publish(context.Background(), topic, &Message{Topic: topic, Type: "test"})
+	_ = ps.Publish(context.Background(), topic, &Message{Topic: topic, Type: "test"})
 
 	select {
 	case <-received:
@@ -132,13 +132,13 @@ func TestMemoryPubSub_Close(t *testing.T) {
 	ps := NewMemoryPubSub()
 
 	topic := "close-test"
-	ps.Subscribe(context.Background(), topic, func(ctx context.Context, msg *Message) {})
+	_, _ = ps.Subscribe(context.Background(), topic, func(ctx context.Context, msg *Message) {})
 
 	if ps.TopicCount() != 1 {
 		t.Errorf("expected 1 topic, got %d", ps.TopicCount())
 	}
 
-	ps.Close()
+	_ = ps.Close()
 
 	if ps.TopicCount() != 0 {
 		t.Errorf("expected 0 topics after close, got %d", ps.TopicCount())
@@ -158,7 +158,7 @@ func TestMemoryPubSub_Close(t *testing.T) {
 
 func TestMemoryPubSub_NoSubscribers(t *testing.T) {
 	ps := NewMemoryPubSub()
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	// Publishing to topic with no subscribers should not error
 	err := ps.Publish(context.Background(), "empty-topic", &Message{Type: "test"})

@@ -189,14 +189,14 @@ func (h *SFUHandler) joinP2P(ctx context.Context, sigCtx *SignalingContext, room
 		if err != nil {
 			h.logger.Error("failed to create call log", "error", err)
 		} else {
-			h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
+			_ = h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
 			room.SetCallID(callLog.ID)
 			// Note: broadcastIncomingCall is handled by CallHandler
 		}
 	} else if existingCallID != uuid.Nil && h.callRepo != nil {
-		h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
+		_ = h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
 		if room.ParticipantCount() == 2 {
-			h.callRepo.StartCall(ctx, existingCallID)
+			_ = h.callRepo.StartCall(ctx, existingCallID)
 		}
 	}
 
@@ -344,7 +344,7 @@ func (h *SFUHandler) sendOfferToParticipant(ctx context.Context, userID, roomID 
 		Type:    EventTypeSFUOffer,
 		Payload: payloadBytes,
 	}
-	h.pubsub.Publish(ctx, msg.Topic, msg)
+	_ = h.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
 func (h *SFUHandler) sendAnswerToParticipant(ctx context.Context, userID, roomID uuid.UUID, sdp string) {
@@ -359,7 +359,7 @@ func (h *SFUHandler) sendAnswerToParticipant(ctx context.Context, userID, roomID
 		Type:    "sfu.answer.server", // Distinguished from client answer
 		Payload: payloadBytes,
 	}
-	h.pubsub.Publish(ctx, msg.Topic, msg)
+	_ = h.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
 func (h *SFUHandler) broadcastParticipantJoined(ctx context.Context, room *SFURoom, joiner *SignalingContext) {
@@ -383,7 +383,7 @@ func (h *SFUHandler) broadcastParticipantJoined(ctx context.Context, room *SFURo
 			Type:    EventTypeCallParticipantJoined,
 			Payload: payloadBytes,
 		}
-		h.pubsub.Publish(ctx, msg.Topic, msg)
+		_ = h.pubsub.Publish(ctx, msg.Topic, msg)
 	}
 }
 
@@ -408,6 +408,6 @@ func (h *SFUHandler) broadcastParticipantLeft(ctx context.Context, room *SFURoom
 			Type:    EventTypeCallParticipantLeft,
 			Payload: payloadBytes,
 		}
-		h.pubsub.Publish(ctx, msg.Topic, msg)
+		_ = h.pubsub.Publish(ctx, msg.Topic, msg)
 	}
 }

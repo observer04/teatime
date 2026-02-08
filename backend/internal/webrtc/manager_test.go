@@ -50,7 +50,7 @@ func TestRoom_AddRemoveParticipant(t *testing.T) {
 
 func TestManager_GetOrCreateRoom(t *testing.T) {
 	ps := pubsub.NewMemoryPubSub()
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	cfg := &Config{
@@ -79,7 +79,7 @@ func TestManager_GetOrCreateRoom(t *testing.T) {
 
 func TestManager_JoinLeaveCall(t *testing.T) {
 	ps := pubsub.NewMemoryPubSub()
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	cfg := &Config{

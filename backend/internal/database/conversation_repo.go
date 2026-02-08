@@ -25,7 +25,7 @@ func (r *ConversationRepository) Create(ctx context.Context, conv *domain.Conver
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Insert conversation
 	_, err = tx.Exec(ctx, `
@@ -232,7 +232,7 @@ func (r *ConversationRepository) CreateMessage(ctx context.Context, msg *domain.
 
 	if err == nil {
 		// Update conversation's updated_at
-		r.db.Pool.Exec(ctx, `
+		_, _ = r.db.Pool.Exec(ctx, `
 			UPDATE conversations SET updated_at = NOW() WHERE id = $1
 		`, msg.ConversationID)
 	}

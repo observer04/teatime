@@ -291,7 +291,7 @@ func (p *SFUParticipant) sendICECandidate(ctx context.Context, candidate *webrtc
 		Type:    EventTypeCallICECandidate,
 		Payload: payloadBytes,
 	}
-	p.sfu.pubsub.Publish(ctx, msg.Topic, msg)
+	_ = p.sfu.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
 // HandleOffer processes an SDP offer from the participant
@@ -375,7 +375,7 @@ func (r *SFURoom) RemoveParticipant(userID uuid.UUID) {
 	defer r.mu.Unlock()
 
 	if p, ok := r.participants[userID]; ok {
-		p.Close()
+		_ = p.Close()
 		delete(r.participants, userID)
 	}
 }

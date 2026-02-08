@@ -27,7 +27,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User, password
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Insert user
 	_, err = tx.Exec(ctx, `
@@ -269,7 +269,7 @@ func (r *UserRepository) CreateUserWithOAuth(ctx context.Context, user *domain.U
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Insert user
 	_, err = tx.Exec(ctx, `

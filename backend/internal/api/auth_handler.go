@@ -138,7 +138,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	// Get refresh token from cookie
 	cookie, err := r.Cookie("refresh_token")
 	if err == nil {
-		h.auth.Logout(r.Context(), cookie.Value)
+		_ = h.auth.Logout(r.Context(), cookie.Value)
 	}
 
 	// Clear cookie
