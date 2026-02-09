@@ -1,9 +1,15 @@
 import React from 'react';
 import wsService from '../services/websocket';
 
-export function useWebSocket(token) {
+export function useWebSocket(token, onIncomingMessage) {
   const [isConnected, setIsConnected] = React.useState(false);
   const [messages, setMessages] = React.useState({});
+  
+  // Use ref to keep callback current without triggering re-connection
+  const onMessageRef = React.useRef(onIncomingMessage);
+  React.useEffect(() => {
+    onMessageRef.current = onIncomingMessage;
+  }, [onIncomingMessage]);
 
   React.useEffect(() => {
     if (!token) return;
@@ -39,6 +45,11 @@ export function useWebSocket(token) {
           normalizedMessage
         ]
       }));
+
+      // Notify parent component using current ref
+      if (onMessageRef.current) {
+        onMessageRef.current(normalizedMessage);
+      }
     });
 
     // Handle receipt updates (single and batch)

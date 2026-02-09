@@ -48,13 +48,37 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
   
   const isMobile = useIsMobile();
 
+  // Handle incoming messages for unread counts
+  const handleIncomingMessage = React.useCallback((message) => {
+    setConversations(prev => {
+      return prev.map(conv => {
+        if (conv.id === message.conversation_id) {
+          const isCurrentChat = currentConversation && currentConversation.id === message.conversation_id;
+          
+          if (isCurrentChat) {
+            // Mark as read immediately if chat is open
+            api.markConversationRead(message.conversation_id, message.id).catch(console.error);
+          }
+
+          return {
+            ...conv,
+            last_message: message,
+            unread_count: isCurrentChat ? 0 : (conv.unread_count || 0) + 1,
+            updated_at: message.created_at
+          };
+        }
+        return conv;
+      });
+    });
+  }, [currentConversation]);
+
   const {
     isConnected,
     messages,
     setMessages,
     sendMessage,
     joinRoom,
-  } = useWebSocket(token);
+  } = useWebSocket(token, handleIncomingMessage);
 
   // WebRTC video call hook
   const {
@@ -103,6 +127,15 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     const conversation = conversations.find(c => c.id === chatId);
     if (conversation) {
       setCurrentConversation(conversation);
+      
+      // Clear unread count locally
+      setConversations(prev => prev.map(c => 
+        c.id === chatId ? { ...c, unread_count: 0 } : c
+      ));
+
+      // Mark as read on backend
+      api.markConversationRead(chatId).catch(console.error);
+
       joinRoom(conversation.id);
       
       // Show chat on mobile
