@@ -61,6 +61,19 @@ function App() {
     handleOAuth();
   }, [login]); // Expect login to be stable
 
+  // Handle token expiry - listen for auth:expired events from API service
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      console.log('[APP] Token expired, logging out');
+      logout();
+    };
+
+    window.addEventListener('auth:expired', handleAuthExpired);
+    return () => {
+      window.removeEventListener('auth:expired', handleAuthExpired);
+    };
+  }, [logout]);
+
   console.log('[APP] Auth state:', { user, token, loading, isAuthenticated, oauthChecking });
 
   if (loading || oauthChecking) {

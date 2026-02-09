@@ -54,11 +54,14 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User, password
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	user := &domain.User{}
 	err := r.db.Pool.QueryRow(ctx, `
-		SELECT id, username, email, display_name, avatar_url, created_at, updated_at
+		SELECT id, username, email, display_name, avatar_url, 
+		       show_online_status, read_receipts_enabled, last_seen_at,
+		       created_at, updated_at
 		FROM users WHERE id = $1
 	`, id).Scan(
 		&user.ID, &user.Username, &user.Email,
 		&user.DisplayName, &user.AvatarURL,
+		&user.ShowOnlineStatus, &user.ReadReceiptsEnabled, &user.LastSeenAt,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -71,11 +74,14 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Use
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	user := &domain.User{}
 	err := r.db.Pool.QueryRow(ctx, `
-		SELECT id, username, email, display_name, avatar_url, created_at, updated_at
+		SELECT id, username, email, display_name, avatar_url,
+		       show_online_status, read_receipts_enabled, last_seen_at,
+		       created_at, updated_at
 		FROM users WHERE email = $1
 	`, email).Scan(
 		&user.ID, &user.Username, &user.Email,
 		&user.DisplayName, &user.AvatarURL,
+		&user.ShowOnlineStatus, &user.ReadReceiptsEnabled, &user.LastSeenAt,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -88,11 +94,14 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	user := &domain.User{}
 	err := r.db.Pool.QueryRow(ctx, `
-		SELECT id, username, email, display_name, avatar_url, created_at, updated_at
+		SELECT id, username, email, display_name, avatar_url,
+		       show_online_status, read_receipts_enabled, last_seen_at,
+		       created_at, updated_at
 		FROM users WHERE username = $1
 	`, username).Scan(
 		&user.ID, &user.Username, &user.Email,
 		&user.DisplayName, &user.AvatarURL,
+		&user.ShowOnlineStatus, &user.ReadReceiptsEnabled, &user.LastSeenAt,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -307,4 +316,69 @@ func (r *UserRepository) UpdateUsername(ctx context.Context, userID uuid.UUID, u
 		UPDATE users SET username = $2, updated_at = NOW() WHERE id = $1
 	`, userID, username)
 	return err
+}
+
+// UpdatePreferences updates user privacy preferences
+func (r *UserRepository) UpdatePreferences(ctx context.Context, userID uuid.UUID, showOnlineStatus, readReceiptsEnabled bool) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		UPDATE users 
+		SET show_online_status = $2, read_receipts_enabled = $3, updated_at = NOW() 
+		WHERE id = $1
+	`, userID, showOnlineStatus, readReceiptsEnabled)
+	return err
+}
+
+// UpdateLastSeen updates the user's last seen timestamp
+func (r *UserRepository) UpdateLastSeen(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		UPDATE users SET last_seen_at = NOW() WHERE id = $1
+	`, userID)
+	return err
+}
+
+// DeleteUser deletes a user and all their associated data
+func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Delete OAuth identities
+	_, err = tx.Exec(ctx, `DELETE FROM oauth_identities WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Delete refresh tokens
+	_, err = tx.Exec(ctx, `DELETE FROM refresh_tokens WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Delete credentials
+	_, err = tx.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Set sender_id to NULL for messages (shows as "deleted user")
+	_, err = tx.Exec(ctx, `UPDATE messages SET sender_id = NULL WHERE sender_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Remove from conversation members
+	_, err = tx.Exec(ctx, `DELETE FROM conversation_members WHERE user_id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	// Delete user
+	_, err = tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }

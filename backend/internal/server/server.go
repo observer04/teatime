@@ -119,6 +119,8 @@ func registerRoutes(mux *http.ServeMux, cfg *config.Config, deps *Dependencies) 
 	mux.HandleFunc("GET /users/{username}", deps.UserHandler.GetByUsername)
 	mux.Handle("GET /users/me", authMiddleware(http.HandlerFunc(deps.UserHandler.GetMe)))
 	mux.Handle("PUT /users/me", authMiddleware(http.HandlerFunc(deps.UserHandler.UpdateProfile)))
+	mux.Handle("PATCH /users/me/preferences", authMiddleware(http.HandlerFunc(deps.UserHandler.UpdatePreferences)))
+	mux.Handle("DELETE /users/me", authMiddleware(http.HandlerFunc(deps.UserHandler.DeleteAccount)))
 
 	// =========================================================================
 	// Conversation routes

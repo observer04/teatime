@@ -64,6 +64,17 @@ class ApiService {
       }
 
       if (!response.ok) {
+        // Handle token expiry - dispatch event before throwing
+        if (response.status === 401) {
+          console.log('[API] Auth error detected, dispatching logout event');
+          // Clear auth data immediately
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          // Dispatch custom event for App.jsx to handle redirect
+          window.dispatchEvent(new CustomEvent('auth:expired'));
+          // Don't throw an error for token expiry - let the redirect handle it
+          return {};
+        }
         throw new Error(data.error || 'Request failed');
       }
 
@@ -112,6 +123,26 @@ class ApiService {
 
   async searchUsers(query) {
     return this.request(`/users/search?q=${encodeURIComponent(query)}`);
+  }
+
+  async updateProfile(displayName, avatarUrl) {
+    return this.request('/users/me', {
+      method: 'PUT',
+      body: JSON.stringify({ display_name: displayName, avatar_url: avatarUrl }),
+    });
+  }
+
+  async updatePreferences(showOnlineStatus, readReceiptsEnabled) {
+    return this.request('/users/me/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify({ show_online_status: showOnlineStatus, read_receipts_enabled: readReceiptsEnabled }),
+    });
+  }
+
+  async deleteAccount() {
+    return this.request('/users/me', {
+      method: 'DELETE',
+    });
   }
 
   // Conversations

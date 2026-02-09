@@ -1,11 +1,12 @@
 import { useState } from "react"
-import { Search, MoreVertical, SquarePlus, Users, Star, CheckSquare, BookOpen, LogOut, CheckCheck, ImageIcon, MessageSquarePlus } from "lucide-react"
+import { Search, MoreVertical, SquarePlus, Users, Star, CheckSquare, BookOpen, LogOut, ImageIcon, MessageSquarePlus, Archive, ArchiveRestore } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
-export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [], onLogout, onNewGroup, onNewChat, onOpenStarred, onMarkAllRead, isMobile = false }) {
+export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [], onLogout, onNewGroup, onNewChat, onOpenStarred, onMarkAllRead, isMobile = false, isArchiveView = false, onArchive, onUnarchive }) {
   const [activeFilter, setActiveFilter] = useState("All")
   const [searchQuery, setSearchQuery] = useState("")
   const [showMenu, setShowMenu] = useState(false)
+  const [contextMenu, setContextMenu] = useState({ show: false, x: 0, y: 0, conversationId: null })
 
   const filterTabs = ["All", "Unread", "Favourites", "Groups"]
 
@@ -49,7 +50,7 @@ export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [],
   return (
     <aside className={`${isMobile ? 'w-full' : 'w-80'} h-full flex flex-col bg-card border-r border-border`}>
       <div className="px-4 py-3 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-foreground">Chats</h1>
+        <h1 className="text-xl font-semibold text-foreground">{isArchiveView ? "Archived" : "Chats"}</h1>
         <div className="flex items-center gap-1">
           <button 
             onClick={onNewChat}
@@ -148,6 +149,15 @@ export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [],
             <button
               key={conv.id}
               onClick={() => onChatSelect(conv.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({
+                  show: true,
+                  x: e.clientX,
+                  y: e.clientY,
+                  conversationId: conv.id
+                });
+              }}
               className={`w-full flex items-center gap-3 px-4 py-3 transition-colors text-left ${
                 activeChat === conv.id ? "bg-primary/10" : "hover:bg-secondary"
               }`}
@@ -201,6 +211,45 @@ export function GlassChatSidebar({ activeChat, onChatSelect, conversations = [],
           )
         })}
       </div>
+
+      {/* Context Menu for Archive/Unarchive */}
+      {contextMenu.show && (
+        <>
+          {/* Click overlay to close menu */}
+          <div 
+            className="fixed inset-0 z-40" 
+            onClick={() => setContextMenu({ show: false, x: 0, y: 0, conversationId: null })}
+          />
+          <div 
+            className="fixed z-50 bg-card border border-border rounded-lg shadow-lg py-1 min-w-[160px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            {isArchiveView ? (
+              <button 
+                onClick={() => {
+                  onUnarchive?.(contextMenu.conversationId);
+                  setContextMenu({ show: false, x: 0, y: 0, conversationId: null });
+                }}
+                className="w-full flex items-center gap-3 px-4 py-2 hover:bg-secondary text-left text-foreground"
+              >
+                <ArchiveRestore className="w-4 h-4" />
+                <span>Unarchive</span>
+              </button>
+            ) : (
+              <button 
+                onClick={() => {
+                  onArchive?.(contextMenu.conversationId);
+                  setContextMenu({ show: false, x: 0, y: 0, conversationId: null });
+                }}
+                className="w-full flex items-center gap-3 px-4 py-2 hover:bg-secondary text-left text-foreground"
+              >
+                <Archive className="w-4 h-4" />
+                <span>Archive</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </aside>
   )
 }

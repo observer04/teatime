@@ -152,6 +152,14 @@ func (h *ConversationHandler) CreateConversation(w http.ResponseWriter, r *http.
 	conv, err := h.convs.GetByID(r.Context(), conv.ID)
 	if err != nil {
 		h.logger.Error("fetch conversation failed", "error", err)
+	} else if conv != nil && conv.Type == domain.ConversationTypeDM {
+		// Populate OtherUser for DMs
+		otherUser, err := h.convs.GetOtherDMUser(r.Context(), conv.ID, userID)
+		if err == nil {
+			conv.OtherUser = otherUser
+		} else {
+			h.logger.Warn("failed to fetch other user for DM", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, conv)
@@ -257,6 +265,16 @@ func (h *ConversationHandler) GetConversation(w http.ResponseWriter, r *http.Req
 		h.logger.Error("get conversation failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get conversation")
 		return
+	}
+
+	// Populate OtherUser for DMs
+	if conv.Type == domain.ConversationTypeDM {
+		otherUser, err := h.convs.GetOtherDMUser(r.Context(), convID, userID)
+		if err == nil {
+			conv.OtherUser = otherUser
+		} else {
+			h.logger.Warn("failed to fetch other user for DM", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, conv)

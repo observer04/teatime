@@ -41,8 +41,8 @@ func NewTokenService(signingKey string) (*TokenService, error) {
 	}
 	return &TokenService{
 		signingKey:      []byte(signingKey),
-		accessTokenTTL:  24 * time.Hour,     // 24 hours (increased from 15m to fix frequent timeouts)
-		refreshTokenTTL: 7 * 24 * time.Hour, // 7 days
+		accessTokenTTL:  10 * 24 * time.Hour, // 10 days (increased to reduce frequent re-logins)
+		refreshTokenTTL: 30 * 24 * time.Hour, // 30 days
 	}, nil
 }
 

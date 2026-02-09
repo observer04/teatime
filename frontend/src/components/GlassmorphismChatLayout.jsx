@@ -12,6 +12,7 @@ import { MembersPanel } from './MembersPanel';
 import VideoCallModal from './VideoCallModal';
 import { CallsTab } from './CallsTab';
 import { IncomingCallModal } from './IncomingCallModal';
+import { ProfileModal } from './ProfileModal';
 import api from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useWebRTC } from '../hooks/useWebRTC';
@@ -38,8 +39,12 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
   const [showNewChatModal, setShowNewChatModal] = React.useState(false);
   const [showStarredModal, setShowStarredModal] = React.useState(false);
   const [showSearchModal, setShowSearchModal] = React.useState(false);
+  const [showArchivedChats, setShowArchivedChats] = React.useState(false);
+  const [archivedConversations, setArchivedConversations] = React.useState([]);
   const [showMembersPanel, setShowMembersPanel] = React.useState(false);
   const [showMobileChat, setShowMobileChat] = React.useState(false);
+  const [showProfileModal, setShowProfileModal] = React.useState(false);
+  const [currentUser, setCurrentUser] = React.useState(user);
   
   const isMobile = useIsMobile();
 
@@ -183,6 +188,56 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     }
   };
 
+  // Load archived conversations
+  const loadArchivedConversations = async () => {
+    try {
+      const data = await api.getArchivedConversations();
+      setArchivedConversations(data.conversations || []);
+    } catch (error) {
+      console.error('Failed to load archived conversations:', error);
+    }
+  };
+
+  // Handle opening archived chats view
+  const handleOpenArchived = async () => {
+    await loadArchivedConversations();
+    setShowArchivedChats(true);
+  };
+
+  // Archive a conversation
+  const handleArchiveConversation = async (conversationId) => {
+    try {
+      await api.archiveConversation(conversationId);
+      // Remove from active list, add to archived
+      const conv = conversations.find(c => c.id === conversationId);
+      if (conv) {
+        setConversations(prev => prev.filter(c => c.id !== conversationId));
+        setArchivedConversations(prev => [conv, ...prev]);
+      }
+      // If currently viewing this chat, clear it
+      if (currentConversation?.id === conversationId) {
+        setCurrentConversation(null);
+      }
+    } catch (error) {
+      console.error('Failed to archive conversation:', error);
+    }
+  };
+
+  // Unarchive a conversation
+  const handleUnarchiveConversation = async (conversationId) => {
+    try {
+      await api.unarchiveConversation(conversationId);
+      // Remove from archived list, add to active
+      const conv = archivedConversations.find(c => c.id === conversationId);
+      if (conv) {
+        setArchivedConversations(prev => prev.filter(c => c.id !== conversationId));
+        setConversations(prev => [conv, ...prev]);
+      }
+    } catch (error) {
+      console.error('Failed to unarchive conversation:', error);
+    }
+  };
+
   // Start a video call in the current conversation
   const handleStartVideoCall = async () => {
     if (!currentConversation) return;
@@ -258,11 +313,19 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
       {/* Left Icon Sidebar - Hidden on mobile when chat is open */}
       <div className={`${isMobile && showMobileChat ? 'hidden' : 'flex'}`}>
         <IconSidebar 
-          activeTab={activeTab} 
-          onTabChange={setActiveTab}
-          currentUser={user}
+          activeTab={showArchivedChats ? 'archived' : activeTab} 
+          onTabChange={(tab) => {
+            if (tab === 'archived') {
+              handleOpenArchived();
+            } else {
+              setShowArchivedChats(false);
+              setActiveTab(tab);
+            }
+          }}
+          currentUser={currentUser}
           onOpenStarred={() => setShowStarredModal(true)}
           onOpenSearch={() => setShowSearchModal(true)}
+          onOpenProfile={() => setShowProfileModal(true)}
         />
       </div>
 
@@ -286,13 +349,16 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
           <GlassChatSidebar 
             activeChat={currentConversation?.id || ''} 
             onChatSelect={handleChatSelect}
-            conversations={conversations}
+            conversations={showArchivedChats ? archivedConversations : conversations}
             onLogout={onLogout}
             onNewGroup={handleNewGroup}
             onNewChat={handleNewChat}
             onOpenStarred={() => setShowStarredModal(true)}
             onMarkAllRead={handleMarkAllRead}
             isMobile={isMobile}
+            isArchiveView={showArchivedChats}
+            onArchive={handleArchiveConversation}
+            onUnarchive={handleUnarchiveConversation}
           />
         )}
       </div>
@@ -431,6 +497,22 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
           }
         }}
         onDecline={declineCall}
+      />
+
+      {/* Profile Modal */}
+      <ProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        user={currentUser}
+        onLogout={onLogout}
+        onProfileUpdated={async () => {
+          try {
+            const updated = await api.getMe();
+            setCurrentUser(updated);
+          } catch (err) {
+            console.error('Failed to refresh user:', err);
+          }
+        }}
       />
     </div>
   )

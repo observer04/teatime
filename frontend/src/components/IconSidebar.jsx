@@ -1,12 +1,10 @@
-import { MessageSquare, Phone, CircleDot, Users, Archive, Settings, Star, Search } from "lucide-react"
+import { MessageSquare, Phone, Archive, Star, Search } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
-export function IconSidebar({ activeTab, onTabChange, currentUser, onOpenStarred, onOpenSearch }) {
+export function IconSidebar({ activeTab, onTabChange, currentUser, onOpenStarred, onOpenSearch, onOpenProfile }) {
   const navItems = [
     { id: "chats", icon: MessageSquare, label: "Chats", badge: 0 },
     { id: "calls", icon: Phone, label: "Calls", badge: 0 },
-    { id: "status", icon: CircleDot, label: "Status" },
-    { id: "channels", icon: Users, label: "Channels" },
   ]
 
   const actionItems = [
@@ -16,7 +14,6 @@ export function IconSidebar({ activeTab, onTabChange, currentUser, onOpenStarred
 
   const bottomItems = [
     { id: "archived", icon: Archive, label: "Archived" },
-    { id: "settings", icon: Settings, label: "Settings" },
   ]
 
   return (
@@ -75,12 +72,14 @@ export function IconSidebar({ activeTab, onTabChange, currentUser, onOpenStarred
         ))}
         
         <div className="mt-2 pt-2 border-t border-border">
-          <Avatar className="w-9 h-9 cursor-pointer hover:ring-2 hover:ring-primary transition-all">
-            <AvatarImage src={currentUser?.avatar_url} alt={currentUser?.username} />
-            <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-              {currentUser?.username?.slice(0, 2).toUpperCase() || 'U'}
-            </AvatarFallback>
-          </Avatar>
+          <button onClick={onOpenProfile} className="rounded-full" aria-label="Open Profile Settings">
+            <Avatar className="w-9 h-9 cursor-pointer hover:ring-2 hover:ring-primary transition-all">
+              <AvatarImage src={currentUser?.avatar_url} alt={currentUser?.username} />
+              <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                {currentUser?.username?.slice(0, 2).toUpperCase() || 'U'}
+              </AvatarFallback>
+            </Avatar>
+          </button>
         </div>
       </div>
     </aside>

@@ -179,3 +179,77 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, user)
 }
+
+// UpdatePreferences godoc
+//
+//	@Summary		Update preferences
+//	@Description	Update privacy preferences (online status, read receipts)
+//	@Tags			users
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			request	body		object{show_online_status=bool,read_receipts_enabled=bool}	true	"Preferences"
+//	@Success		200	{object}	interface{}
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Router			/users/me/preferences [patch]
+func (h *UserHandler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var input struct {
+		ShowOnlineStatus    bool `json:"show_online_status"`
+		ReadReceiptsEnabled bool `json:"read_receipts_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.users.UpdatePreferences(r.Context(), userID, input.ShowOnlineStatus, input.ReadReceiptsEnabled); err != nil {
+		h.logger.Error("update preferences failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to update preferences")
+		return
+	}
+
+	// Return updated user
+	user, err := h.users.GetByID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
+}
+
+// DeleteAccount godoc
+//
+//	@Summary		Delete account
+//	@Description	Permanently delete your account and all associated data
+//	@Tags			users
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		200	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Failure		500	{object}	map[string]string
+//	@Router			/users/me [delete]
+func (h *UserHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if err := h.users.DeleteUser(r.Context(), userID); err != nil {
+		h.logger.Error("delete account failed", "error", err, "user_id", userID)
+		writeError(w, http.StatusInternalServerError, "failed to delete account")
+		return
+	}
+
+	h.logger.Info("account deleted", "user_id", userID)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "account deleted successfully"})
+}
+

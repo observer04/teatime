@@ -8,30 +8,40 @@ import (
 
 // User represents a registered user
 type User struct {
-	ID          uuid.UUID `json:"id"`
-	Username    string    `json:"username"`
-	Email       string    `json:"email,omitempty"` // omit in public responses
-	DisplayName string    `json:"display_name,omitempty"`
-	AvatarURL   string    `json:"avatar_url,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                  uuid.UUID  `json:"id"`
+	Username            string     `json:"username"`
+	Email               string     `json:"email,omitempty"` // omit in public responses
+	DisplayName         string     `json:"display_name,omitempty"`
+	AvatarURL           string     `json:"avatar_url,omitempty"`
+	ShowOnlineStatus    bool       `json:"show_online_status"`
+	ReadReceiptsEnabled bool       `json:"read_receipts_enabled"`
+	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 // PublicUser is the safe-to-expose version of User
 type PublicUser struct {
-	ID          uuid.UUID `json:"id"`
-	Username    string    `json:"username"`
-	DisplayName string    `json:"display_name,omitempty"`
-	AvatarURL   string    `json:"avatar_url,omitempty"`
+	ID          uuid.UUID  `json:"id"`
+	Username    string     `json:"username"`
+	DisplayName string     `json:"display_name,omitempty"`
+	AvatarURL   string     `json:"avatar_url,omitempty"`
+	IsOnline    bool       `json:"is_online,omitempty"`    // Only set if user allows showing online status
+	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"` // Only set if user allows showing online status
 }
 
 func (u *User) ToPublic() PublicUser {
-	return PublicUser{
+	pub := PublicUser{
 		ID:          u.ID,
 		Username:    u.Username,
 		DisplayName: u.DisplayName,
 		AvatarURL:   u.AvatarURL,
 	}
+	// Only expose presence info if user has opted in
+	if u.ShowOnlineStatus {
+		pub.LastSeenAt = u.LastSeenAt
+	}
+	return pub
 }
 
 // Credentials stores password hash separately from user
