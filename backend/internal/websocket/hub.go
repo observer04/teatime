@@ -156,10 +156,9 @@ func (h *Hub) handleUnregister(client *Client) {
 			UserID:   userID,
 			Username: username,
 		}
-		leavePayload := json.RawMessage(`{"room_id":"` + roomID.String() + `"}`)
-
+		
 		for _, roomID := range roomsForCallCleanup {
-			leavePayload = json.RawMessage(`{"room_id":"` + roomID.String() + `"}`)
+			leavePayload := json.RawMessage(`{"room_id":"` + roomID.String() + `"}`)
 
 			// Clean up SFU participation
 			if h.sfuHandler != nil {

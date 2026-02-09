@@ -416,6 +416,53 @@ func (h *SFUHandler) broadcastParticipantJoined(ctx context.Context, room *SFURo
 	}
 }
 
+func (h *SFUHandler) sendTrackInfo(ctx context.Context, userID uuid.UUID, room *SFURoom) {
+	// Get all tracks from all participants
+	participants := room.GetParticipantList()
+	var tracks []TrackInfo
+
+	for _, p := range participants {
+		// In a real implementation, we would get actual track info
+		// For now, we'll infer it from the participant list
+		// This assumes 1 video and 1 audio track per participant if they are publishing
+		if p.HasVideo {
+			tracks = append(tracks, TrackInfo{
+				ID:       p.UserID.String() + "-video", // predictable ID
+				Kind:     "video",
+				UserID:   p.UserID.String(),
+				Username: p.Username,
+			})
+		}
+		if p.HasAudio {
+			tracks = append(tracks, TrackInfo{
+				ID:       p.UserID.String() + "-audio",
+				Kind:     "audio",
+				UserID:   p.UserID.String(),
+				Username: p.Username,
+			})
+		}
+	}
+
+	payload := SFUTracksPayload{
+		RoomID: room.ID.String(),
+		Tracks: tracks,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("failed to marshal track info", "error", err)
+		return
+	}
+
+	// Send to the specific user
+	msg := &pubsub.Message{
+		Topic:   pubsub.Topics.User(userID.String()),
+		Type:    EventTypeSFUTracks,
+		Payload: payloadBytes,
+	}
+	_ = h.pubsub.Publish(ctx, msg.Topic, msg)
+}
+
 func (h *SFUHandler) broadcastParticipantLeft(ctx context.Context, room *SFURoom, leaver *SignalingContext) {
 	event := CallParticipantEvent{
 		RoomID:   room.ID,

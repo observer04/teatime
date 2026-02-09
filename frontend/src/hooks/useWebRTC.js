@@ -157,8 +157,32 @@ export function useWebRTC(userId) {
     };
 
     // Handle ICE connection state
-    pc.oniceconnectionstatechange = () => {
+    pc.oniceconnectionstatechange = async () => {
       console.log('SFU ICE connection state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.error('SFU ICE connection failed, attempting restart...');
+        try {
+          const roomId = callRoomIdRef.current;
+          if (!roomId) {
+            console.warn('Cannot restart ICE for SFU, no room ID.');
+            return;
+          }
+
+          if (pc.restartIce) {
+            pc.restartIce();
+          } else {
+            // Fallback for older browsers or if restartIce not available
+            const offer = await pc.createOffer({ iceRestart: true });
+            await pc.setLocalDescription(offer);
+            wsService.send('sfu.offer', {
+              room_id: roomId,
+              sdp: pc.localDescription.sdp
+            });
+          }
+        } catch (err) {
+          console.error('Failed to restart ICE for SFU:', err);
+        }
+      }
     };
 
     return pc;
@@ -488,9 +512,13 @@ export function useWebRTC(userId) {
     // Clear any pending timers
     clearCleanupTimers();
 
-    const roomId = callRoomIdRef.current;
-    if (roomId) {
-      wsService.send('call.leave', { room_id: roomId });
+    // Send leave message
+    if (callRoomIdRef.current) {
+      if (callModeRef.current === 'sfu') {
+        wsService.send('sfu.leave', { room_id: callRoomIdRef.current });
+      } else {
+        wsService.send('call.leave', { room_id: callRoomIdRef.current });
+      }
     }
 
     // Stop local stream
@@ -911,8 +939,14 @@ export function useWebRTC(userId) {
       }
       
       try {
-        const offer = JSON.parse(payload.sdp);
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        // Server sends raw SDP string, NOT a JSON object
+        const sdp = payload.sdp;
+        
+        console.log('Setting SFU remote description (offer)...');
+        await pc.setRemoteDescription(new RTCSessionDescription({
+          type: 'offer',
+          sdp: sdp
+        }));
         
         // Process any pending ICE candidates
         for (const candidate of sfuPendingCandidates.current) {
@@ -925,7 +959,7 @@ export function useWebRTC(userId) {
         
         wsService.send('sfu.answer', {
           room_id: payload.room_id,
-          sdp: JSON.stringify(answer)
+          sdp: answer.sdp // Send raw SDP string
         });
       } catch (err) {
         console.error('Failed to handle SFU offer:', err);
@@ -934,6 +968,43 @@ export function useWebRTC(userId) {
 
     const unsubSFUOffer = wsService.on('sfu.offer', handleSFUOffer);
     return () => unsubSFUOffer();
+  }, []);
+
+  // SFU: Handle answer from server
+  React.useEffect(() => {
+    const handleSFUAnswer = async (payload) => {
+      console.log('handleSFUAnswer:', payload);
+      const pc = sfuConnection.current;
+      if (!pc) {
+        console.warn('Received SFU answer but no peer connection');
+        return;
+      }
+
+      try {
+        const sdp = payload.sdp;
+        console.log('Setting SFU remote description (answer)...');
+        await pc.setRemoteDescription(new RTCSessionDescription({
+          type: 'answer',
+          sdp: sdp
+        }));
+        
+        // Process any queued candidates
+        while (sfuPendingCandidates.current.length > 0) {
+          const candidate = sfuPendingCandidates.current.shift();
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log('Added queued SFU candidate');
+          } catch (e) {
+            console.error('Error adding queued SFU candidate:', e);
+          }
+        }
+      } catch (err) {
+        console.error('Error handling SFU answer:', err);
+      }
+    };
+
+    const unsubSFUAnswer = wsService.on('sfu.answer', handleSFUAnswer);
+    return () => unsubSFUAnswer();
   }, []);
 
   // SFU: Handle ICE candidate from server
@@ -1061,7 +1132,6 @@ export function useWebRTC(userId) {
     const unsubCancelled = wsService.on('call.cancelled', handleCallCancelled);
     const unsubEnded = wsService.on('call.ended', handleCallEnded);
     const unsubDeclined = wsService.on('call.declined', handleCallDeclined);
-
     return () => {
       unsubIncoming();
       unsubCancelled();

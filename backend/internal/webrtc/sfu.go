@@ -40,6 +40,7 @@ type SFURoom struct {
 	mu           sync.RWMutex
 	ID           uuid.UUID
 	participants map[uuid.UUID]*SFUParticipant
+	callID       uuid.UUID
 	logger       *slog.Logger
 }
 
@@ -106,6 +107,20 @@ func (s *SFU) DeleteRoom(roomID uuid.UUID) {
 	defer s.mu.Unlock()
 	delete(s.rooms, roomID)
 	s.logger.Info("deleted SFU room", "room_id", roomID)
+}
+
+// GetCallID returns the call ID associated with the room
+func (r *SFURoom) GetCallID() uuid.UUID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.callID
+}
+
+// SetCallID sets the call ID for the room
+func (r *SFURoom) SetCallID(callID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.callID = callID
 }
 
 // JoinRoom adds a participant to an SFU room and creates their PeerConnection
@@ -401,9 +416,24 @@ func (r *SFURoom) GetParticipantList() []Participant {
 
 	list := make([]Participant, 0, len(r.participants))
 	for _, p := range r.participants {
+		hasVideo := false
+		hasAudio := false
+
+		p.mu.RLock()
+		for _, t := range p.localTracks {
+			if t.Kind() == webrtc.RTPCodecTypeVideo {
+				hasVideo = true
+			} else if t.Kind() == webrtc.RTPCodecTypeAudio {
+				hasAudio = true
+			}
+		}
+		p.mu.RUnlock()
+
 		list = append(list, Participant{
 			UserID:   p.UserID,
 			Username: p.Username,
+			HasVideo: hasVideo,
+			HasAudio: hasAudio,
 		})
 	}
 	return list
