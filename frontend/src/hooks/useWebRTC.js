@@ -210,12 +210,29 @@ export function useWebRTC(userId) {
     };
 
     // Handle ICE connection state changes (more granular than connectionstatechange)
-    pc.oniceconnectionstatechange = () => {
+    pc.oniceconnectionstatechange = async () => {
       console.log('ICE connection state for', peerId, ':', pc.iceConnectionState);
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         console.log('✅ ICE connection established with:', peerId);
       } else if (pc.iceConnectionState === 'failed') {
         console.error('❌ ICE connection failed with:', peerId);
+        // Attempt ICE restart — standard WebRTC recovery for transient network issues
+        console.log('Attempting ICE restart for:', peerId);
+        try {
+          const restartOffer = await pc.createOffer({ iceRestart: true });
+          await pc.setLocalDescription(restartOffer);
+          const roomId = callRoomIdRef.current;
+          if (roomId) {
+            wsService.send('call.offer', {
+              room_id: roomId,
+              target_id: peerId,
+              sdp: JSON.stringify(restartOffer)
+            });
+            console.log('ICE restart offer sent to:', peerId);
+          }
+        } catch (err) {
+          console.error('ICE restart failed:', err);
+        }
       }
     };
 
@@ -790,6 +807,18 @@ export function useWebRTC(userId) {
         console.log('Setting remote description (offer)...');
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         
+        // Flush any ICE candidates that arrived after createPeerConnection
+        // but before setRemoteDescription completed
+        const pendingOffer = pendingCandidates.current.get(payload.from_id);
+        if (pendingOffer && pendingOffer.length > 0) {
+          console.log('Flushing', pendingOffer.length, 'pending ICE candidates after setRemoteDescription (offer)');
+          for (const c of pendingOffer) {
+            await pc.addIceCandidate(new RTCIceCandidate(c))
+              .catch(err => console.error('Failed to add buffered ICE candidate:', err));
+          }
+          pendingCandidates.current.delete(payload.from_id);
+        }
+        
         console.log('Creating answer...');
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -825,6 +854,17 @@ export function useWebRTC(userId) {
       try {
         const answer = JSON.parse(payload.sdp);
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        
+        // CRITICAL: Flush any ICE candidates that arrived before the answer
+        const pendingAnswer = pendingCandidates.current.get(payload.from_id);
+        if (pendingAnswer && pendingAnswer.length > 0) {
+          console.log('Flushing', pendingAnswer.length, 'pending ICE candidates after setRemoteDescription (answer)');
+          for (const c of pendingAnswer) {
+            await pc.addIceCandidate(new RTCIceCandidate(c))
+              .catch(err => console.error('Failed to add buffered ICE candidate:', err));
+          }
+          pendingCandidates.current.delete(payload.from_id);
+        }
       } catch (err) {
         console.error('Failed to handle answer:', err);
       }

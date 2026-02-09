@@ -33,7 +33,7 @@ services:
       - OAUTH_ENABLED=${OAUTH_ENABLED:-true}
       # WebRTC/TURN configuration
       - ICE_STUN_URLS=stun:stun.l.google.com:19302,stun:20.219.56.51:3478
-      - ICE_TURN_URLS=turn:20.219.56.51:3478
+      - ICE_TURN_URLS=turn:20.219.56.51:3478,turn:20.219.56.51:3478?transport=tcp
       - TURN_USERNAME=${TURN_USERNAME:-teatime}
       - TURN_PASSWORD=${TURN_PASSWORD:-teatime-turn-secret}
       # R2 Configuration
