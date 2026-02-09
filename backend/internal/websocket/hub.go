@@ -150,14 +150,26 @@ func (h *Hub) handleUnregister(client *Client) {
 	h.mu.Unlock()
 
 	// Clean up call participation for this user (they might be in active calls)
-	if userID != uuid.Nil && h.callHandler != nil {
+	if userID != uuid.Nil {
+		ctx := context.Background()
+		sigCtx := &webrtc.SignalingContext{
+			UserID:   userID,
+			Username: username,
+		}
+		leavePayload := json.RawMessage(`{"room_id":"` + roomID.String() + `"}`)
+
 		for _, roomID := range roomsForCallCleanup {
-			// Attempt to leave any active calls in rooms the user was in
-			ctx := context.Background()
-			_ = h.callHandler.HandleLeave(ctx, &webrtc.SignalingContext{
-				UserID:   userID,
-				Username: username,
-			}, json.RawMessage(`{"room_id":"`+roomID.String()+`"}`))
+			leavePayload = json.RawMessage(`{"room_id":"` + roomID.String() + `"}`)
+
+			// Clean up SFU participation
+			if h.sfuHandler != nil {
+				_ = h.sfuHandler.HandleSFULeave(ctx, sigCtx, leavePayload)
+			}
+
+			// Clean up P2P participation
+			if h.callHandler != nil {
+				_ = h.callHandler.HandleLeave(ctx, sigCtx, leavePayload)
+			}
 		}
 	}
 
@@ -205,6 +217,8 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleSFUAnswer(client, msg.Payload)
 	case webrtc.EventTypeSFUCandidate:
 		h.handleSFUCandidate(client, msg.Payload)
+	case webrtc.EventTypeSFULeave:
+		h.handleSFULeave(client, msg.Payload)
 	default:
 		client.sendError("unknown_event", "Unknown event type: "+msg.Type)
 	}
@@ -516,14 +530,31 @@ func (h *Hub) handleCallJoin(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	if h.callHandler == nil {
-		client.sendError("calls_disabled", "Video calls are not enabled")
-		return
-	}
-
 	sigCtx := &webrtc.SignalingContext{
 		UserID:   client.UserID(),
 		Username: client.Username(),
+	}
+
+	// Route through SFU handler if available — it auto-delegates to P2P for 1:1 calls
+	if h.sfuHandler != nil {
+		config, err := h.sfuHandler.HandleGroupJoin(context.Background(), sigCtx, payload)
+		if err != nil {
+			if callErr, ok := err.(*webrtc.CallError); ok {
+				client.sendError(callErr.Code, callErr.Message)
+			} else {
+				client.sendError("call_error", err.Error())
+			}
+			return
+		}
+		msg, _ := NewMessage(webrtc.EventTypeCallConfig, config)
+		_ = client.Send(msg)
+		return
+	}
+
+	// Fallback: direct P2P only (no SFU handler)
+	if h.callHandler == nil {
+		client.sendError("calls_disabled", "Video calls are not enabled")
+		return
 	}
 
 	config, err := h.callHandler.HandleJoin(context.Background(), sigCtx, payload)
@@ -536,7 +567,6 @@ func (h *Hub) handleCallJoin(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	// Send config back to client
 	msg, _ := NewMessage(webrtc.EventTypeCallConfig, config)
 	_ = client.Send(msg)
 }
@@ -660,6 +690,19 @@ func (h *Hub) handleSFUCandidate(client *Client, payload json.RawMessage) {
 	}
 
 	_ = h.sfuHandler.HandleSFUCandidate(context.Background(), sigCtx, payload)
+}
+
+func (h *Hub) handleSFULeave(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.sfuHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	_ = h.sfuHandler.HandleSFULeave(context.Background(), sigCtx, payload)
 }
 
 // BroadcastToRoom sends a message to all clients in a room via PubSub

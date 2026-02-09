@@ -18,6 +18,7 @@ const (
 	EventTypeSFUAnswer    = "sfu.answer"    // Participant sends answer to SFU
 	EventTypeSFUCandidate = "sfu.candidate" // ICE candidate exchange with SFU
 	EventTypeSFUTracks    = "sfu.tracks"    // Track list update
+	EventTypeSFULeave     = "sfu.leave"     // Participant leaves SFU room
 )
 
 // SFUHandler processes signaling messages for group calls
@@ -135,6 +136,31 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 		return nil, &CallError{Code: "room_not_found", Message: "Room not found after join"}
 	}
 
+	// Call logging: create call log for initiator, add participant for joiners
+	if h.callRepo != nil {
+		existingCallID := room.GetCallID()
+		isInitiator := existingCallID == uuid.Nil
+
+		if isInitiator {
+			ct := database.CallTypeVideo
+			if callType == "audio" {
+				ct = database.CallTypeAudio
+			}
+			callLog, err := h.callRepo.CreateCallLog(ctx, roomID, sigCtx.UserID, ct)
+			if err != nil {
+				h.logger.Error("failed to create SFU call log", "error", err)
+			} else {
+				_ = h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
+				room.SetCallID(callLog.ID)
+			}
+		} else {
+			_ = h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
+			if room.ParticipantCount() == 2 {
+				_ = h.callRepo.StartCall(ctx, existingCallID)
+			}
+		}
+	}
+
 	// Notify other participants about new joiner
 	h.broadcastParticipantJoined(ctx, room, sigCtx)
 
@@ -146,6 +172,9 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 		// Send offer to participant
 		h.sendOfferToParticipant(ctx, sigCtx.UserID, roomID, offer)
 	}
+
+	// Send track info so frontend can identify remote streams
+	h.sendTrackInfo(ctx, sigCtx.UserID, room)
 
 	// Return SFU config
 	iceServers := h.p2pMgr.GetConfig().GetICEServers()
@@ -356,7 +385,7 @@ func (h *SFUHandler) sendAnswerToParticipant(ctx context.Context, userID, roomID
 
 	msg := &pubsub.Message{
 		Topic:   pubsub.Topics.User(userID.String()),
-		Type:    "sfu.answer.server", // Distinguished from client answer
+		Type:    EventTypeSFUAnswer,
 		Payload: payloadBytes,
 	}
 	_ = h.pubsub.Publish(ctx, msg.Topic, msg)
