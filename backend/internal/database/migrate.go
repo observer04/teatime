@@ -100,12 +100,16 @@ func EnsureSchema(ctx context.Context, db *DB, migrationsDir string) error {
 		}
 
 		if _, err := tx.Exec(ctx, string(content)); err != nil {
-			tx.Rollback(ctx)
+			if rbErr := tx.Rollback(ctx); rbErr != nil {
+				slog.Error("rollback failed", "error", rbErr)
+			}
 			return fmt.Errorf("execute migration %s: %w", file, err)
 		}
 
 		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
-			tx.Rollback(ctx)
+			if rbErr := tx.Rollback(ctx); rbErr != nil {
+				slog.Error("rollback failed", "error", rbErr)
+			}
 			return fmt.Errorf("record migration %s: %w", file, err)
 		}
 
