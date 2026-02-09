@@ -37,6 +37,7 @@ export function useWebRTC(userId) {
   const localStreamRef = React.useRef(null);
   const callRoomIdRef = React.useRef(null);
   const iceServersRef = React.useRef(DEFAULT_ICE_CONFIG.iceServers);
+  const callModeRef = React.useRef('p2p');
   
   // Track if we've ever had other participants (for proper call ending)
   const hasEverHadParticipants = React.useRef(false);
@@ -46,6 +47,7 @@ export function useWebRTC(userId) {
   React.useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
   React.useEffect(() => { callRoomIdRef.current = callRoomId; }, [callRoomId]);
   React.useEffect(() => { iceServersRef.current = iceServers; }, [iceServers]);
+  React.useEffect(() => { callModeRef.current = callMode; }, [callMode]);
   
   // Track max participants we've seen
   React.useEffect(() => {
@@ -541,7 +543,9 @@ export function useWebRTC(userId) {
     setIsInCall(false);
     setCallRoomId(null);
     callRoomIdRef.current = null;
+    callRoomIdRef.current = null;
     setCallMode('p2p');
+    callModeRef.current = 'p2p';
     setParticipants([]);
     setRemoteStreams({});
     setCallState('idle');
