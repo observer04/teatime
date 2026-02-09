@@ -12,14 +12,7 @@ import (
 	"github.com/observer/teatime/internal/pubsub"
 )
 
-// Additional event types for SFU
-const (
-	EventTypeSFUOffer     = "sfu.offer"     // SFU sends offer to participant
-	EventTypeSFUAnswer    = "sfu.answer"    // Participant sends answer to SFU
-	EventTypeSFUCandidate = "sfu.candidate" // ICE candidate exchange with SFU
-	EventTypeSFUTracks    = "sfu.tracks"    // Track list update
-	EventTypeSFULeave     = "sfu.leave"     // Participant leaves SFU room
-)
+// Additional event types for SFU are defined in protocol.go
 
 // SFUHandler processes signaling messages for group calls
 type SFUHandler struct {
@@ -112,6 +105,34 @@ func (h *SFUHandler) HandleGroupJoin(ctx context.Context, sigCtx *SignalingConte
 	isGroup := p.IsGroup || conv.Type == "group" || len(conv.Members) > 2
 
 	if isGroup {
+		// FIX 1: Split-Brain Detection & Migration
+		// Check if there is an active P2P call for this room
+		p2pRoom := h.p2pMgr.GetRoom(roomID)
+		if p2pRoom != nil && p2pRoom.ParticipantCount() > 0 {
+			h.logger.Info("detected P2P room during group join - triggering migration", "room_id", roomID)
+			
+			// Notify P2P participants to reload/reconnect, which will now route them to SFU
+			// because the conversation type is now 'group' (or implicit group)
+			migrationEvent := map[string]interface{}{
+				"room_id": roomID.String(),
+				"reason": "switching_to_group",
+			}
+			payloadBytes, _ := json.Marshal(migrationEvent)
+
+			// Broadcast 'call.error' with specific code to force frontend reconnection
+			// Or a specific 'call.migration' event if frontend supports it
+			for _, participant := range p2pRoom.GetParticipants() {
+				msg := &pubsub.Message{
+					Topic:   pubsub.Topics.User(participant.UserID.String()),
+					Type:    "call.migration", // Frontend needs to listen for this!
+					Payload: payloadBytes,
+				}
+				h.pubsub.Publish(ctx, msg.Topic, msg)
+			}
+			
+			// Optional: Close P2P room logic here
+		}
+
 		return h.joinSFU(ctx, sigCtx, roomID, p.CallType)
 	}
 
@@ -418,30 +439,7 @@ func (h *SFUHandler) broadcastParticipantJoined(ctx context.Context, room *SFURo
 
 func (h *SFUHandler) sendTrackInfo(ctx context.Context, userID uuid.UUID, room *SFURoom) {
 	// Get all tracks from all participants
-	participants := room.GetParticipantList()
-	var tracks []TrackInfo
-
-	for _, p := range participants {
-		// In a real implementation, we would get actual track info
-		// For now, we'll infer it from the participant list
-		// This assumes 1 video and 1 audio track per participant if they are publishing
-		if p.HasVideo {
-			tracks = append(tracks, TrackInfo{
-				ID:       p.UserID.String() + "-video", // predictable ID
-				Kind:     "video",
-				UserID:   p.UserID.String(),
-				Username: p.Username,
-			})
-		}
-		if p.HasAudio {
-			tracks = append(tracks, TrackInfo{
-				ID:       p.UserID.String() + "-audio",
-				Kind:     "audio",
-				UserID:   p.UserID.String(),
-				Username: p.Username,
-			})
-		}
-	}
+	tracks := room.GetTracks()
 
 	payload := SFUTracksPayload{
 		RoomID: room.ID.String(),

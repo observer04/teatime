@@ -121,10 +121,23 @@ func (h *Hub) handleUnregister(client *Client) {
 	if userID != uuid.Nil {
 		// Remove from user's client set
 		if clients, ok := h.clients[userID]; ok {
-			delete(clients, client)
-			if len(clients) == 0 {
-				delete(h.clients, userID)
-				// User is now offline - could broadcast presence here
+			// Unregister client
+			if _, ok := clients[client]; ok { // Check if client actually exists in the map
+				delete(clients, client)
+				if len(clients) == 0 {
+					delete(h.clients, userID)
+					// User is now offline - could broadcast presence here
+
+					// Clean up WebRTC participation for this user (Ghost User fix)
+					// This handles unexpected disconnects when the last client for a user disconnects.
+					if h.callHandler != nil {
+						// Assuming HandleDisconnect takes userID and username
+						h.callHandler.HandleDisconnect(context.Background(), userID, username)
+					}
+					// SFU cleanup should also be handled if possible,
+					// but SFU interactions are often room-based and handled by room leave logic.
+					// For P2P Manager, we just added HandleDisconnect.
+				}
 			}
 		}
 	}
@@ -211,7 +224,13 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleCallICECandidate(client, msg.Payload)
 	case webrtc.EventTypeCallDeclined:
 		h.handleCallDeclined(client, msg.Payload)
+	case webrtc.EventTypeCallReady:
+		h.handleCallReady(client, msg.Payload)
 	// SFU group call events
+	case webrtc.EventTypeSFUJoin:
+		h.handleSFUJoin(client, msg.Payload)
+	case webrtc.EventTypeSFUOffer:
+		h.handleSFUOffer(client, msg.Payload)
 	case webrtc.EventTypeSFUAnswer:
 		h.handleSFUAnswer(client, msg.Payload)
 	case webrtc.EventTypeSFUCandidate:
@@ -653,6 +672,71 @@ func (h *Hub) handleCallDeclined(client *Client, payload json.RawMessage) {
 	}
 
 	_ = h.callHandler.HandleDeclined(context.Background(), sigCtx, payload)
+}
+
+func (h *Hub) handleCallReady(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.callHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	_ = h.callHandler.HandleReady(context.Background(), sigCtx, payload)
+}
+
+func (h *Hub) handleSFUJoin(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		client.sendError("not_authenticated", "Must authenticate first")
+		return
+	}
+
+	if h.sfuHandler == nil {
+		client.sendError("sfu_disabled", "SFU group calls are not enabled")
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	config, err := h.sfuHandler.HandleGroupJoin(context.Background(), sigCtx, payload)
+	if err != nil {
+		if callErr, ok := err.(*webrtc.CallError); ok {
+			client.sendError(callErr.Code, callErr.Message)
+		} else {
+			client.sendError("join_failed", err.Error())
+		}
+		return
+	}
+
+	// Send config back
+	responseBytes, _ := json.Marshal(config)
+	msg := &Message{
+		Type:    webrtc.EventTypeCallConfig, 
+		Payload: responseBytes,
+	}
+	client.Send(msg)
+}
+
+func (h *Hub) handleSFUOffer(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() || h.sfuHandler == nil {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	if err := h.sfuHandler.HandleSFUOffer(context.Background(), sigCtx, payload); err != nil {
+		if callErr, ok := err.(*webrtc.CallError); ok {
+			client.sendError(callErr.Code, callErr.Message)
+		}
+	}
 }
 
 func (h *Hub) handleSFUAnswer(client *Client, payload json.RawMessage) {

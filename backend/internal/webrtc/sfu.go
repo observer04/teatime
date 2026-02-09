@@ -1,23 +1,17 @@
-// Package webrtc provides WebRTC functionality for video/audio calls.
-// This file implements the SFU (Selective Forwarding Unit) for group calls.
-// The SFU receives media from each participant and forwards it to all others.
-//
-// Architecture:
-// - For 1:1 calls: Use P2P mesh (existing handler.go/manager.go)
-// - For group calls (3+ participants): Use SFU (this file)
-//
-// The SFU creates a server-side PeerConnection for each participant.
-// When a participant sends media, the SFU forwards it to all other participants.
 package webrtc
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/observer/teatime/internal/pubsub"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -30,12 +24,10 @@ type SFU struct {
 	logger *slog.Logger
 }
 
-// SFUConfig holds configuration for the SFU
 type SFUConfig struct {
 	ICEServers []webrtc.ICEServer
 }
 
-// SFURoom represents a group call room managed by the SFU
 type SFURoom struct {
 	mu           sync.RWMutex
 	ID           uuid.UUID
@@ -44,28 +36,43 @@ type SFURoom struct {
 	logger       *slog.Logger
 }
 
-// SFUParticipant represents a participant in an SFU room
 type SFUParticipant struct {
 	mu           sync.RWMutex
 	UserID       uuid.UUID
 	Username     string
 	pc           *webrtc.PeerConnection
-	localTracks  map[string]*webrtc.TrackLocalStaticRTP // Tracks we're sending to this participant
-	remoteTracks map[string]*webrtc.TrackRemote         // Tracks received from this participant
+	localTracks  map[string]*webrtc.TrackLocalStaticRTP
+	remoteTracks map[string]*webrtc.TrackRemote
 	room         *SFURoom
 	sfu          *SFU
 	logger       *slog.Logger
+
+	// Renegotiation handling
+	isNegotiating      bool
+	negotiationPending bool
+
+	// Lifecycle management
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// Candidate Buffering
+	pendingCandidates []*webrtc.ICECandidate
+
+	// Track subscriptions (Sender side)
+	subscribers   map[string][]*webrtc.TrackLocalStaticRTP // trackID -> list of subscribers
+	subscribersMu sync.RWMutex
+
+	// Track subscriptions (Receiver side) - to clean up on leave
+	subscriptions map[string]uuid.UUID // trackID -> senderID
 }
 
-// TrackInfo describes a media track
 type TrackInfo struct {
 	ID       string `json:"id"`
-	Kind     string `json:"kind"` // "audio" or "video"
+	Kind     string `json:"kind"`
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 }
 
-// NewSFU creates a new SFU instance
 func NewSFU(config *SFUConfig, ps pubsub.PubSub, logger *slog.Logger) *SFU {
 	return &SFU{
 		rooms:  make(map[uuid.UUID]*SFURoom),
@@ -75,112 +82,167 @@ func NewSFU(config *SFUConfig, ps pubsub.PubSub, logger *slog.Logger) *SFU {
 	}
 }
 
-// GetRoom returns an SFU room if it exists
-func (s *SFU) GetRoom(roomID uuid.UUID) *SFURoom {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.rooms[roomID]
-}
-
-// GetOrCreateRoom gets an existing room or creates a new one
 func (s *SFU) GetOrCreateRoom(roomID uuid.UUID) *SFURoom {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if room, ok := s.rooms[roomID]; ok {
 		return room
 	}
-
 	room := &SFURoom{
 		ID:           roomID,
 		participants: make(map[uuid.UUID]*SFUParticipant),
 		logger:       s.logger.With("room_id", roomID),
 	}
 	s.rooms[roomID] = room
-	s.logger.Info("created SFU room", "room_id", roomID)
 	return room
 }
 
-// DeleteRoom removes an empty room
+func (s *SFU) GetRoom(roomID uuid.UUID) *SFURoom {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rooms[roomID]
+}
+
 func (s *SFU) DeleteRoom(roomID uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.rooms, roomID)
-	s.logger.Info("deleted SFU room", "room_id", roomID)
 }
 
-// GetCallID returns the call ID associated with the room
-func (r *SFURoom) GetCallID() uuid.UUID {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.callID
+// requestKeyframe relays a PLI to the original sender of a track
+func (s *SFU) requestKeyframe(trackID string, roomID uuid.UUID) {
+	room := s.GetRoom(roomID)
+	if room == nil {
+		return
+	}
+
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+
+	// Find the participant who owns this track (the sender)
+	for _, p := range room.participants {
+		p.mu.RLock()
+		if track, ok := p.remoteTracks[trackID]; ok {
+			// Found the sender! Send PLI to them.
+			// Only log if Debug level is enabled to avoid spam
+			// p.logger.Debug("Relaying PLI for track", "track_id", trackID)
+			
+			_ = p.pc.WriteRTCP([]rtcp.Packet{
+				&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+			})
+			p.mu.RUnlock()
+			return
+		}
+		p.mu.RUnlock()
+	}
 }
 
-// SetCallID sets the call ID for the room
 func (r *SFURoom) SetCallID(callID uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.callID = callID
 }
 
-// JoinRoom adds a participant to an SFU room and creates their PeerConnection
+func (r *SFURoom) GetCallID() uuid.UUID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.callID
+}
+
+// GetTracks returns actual track info from participants for mapping
+func (r *SFURoom) GetTracks() []TrackInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var tracks []TrackInfo
+	for _, p := range r.participants {
+		p.mu.RLock()
+		for _, track := range p.remoteTracks {
+			tracks = append(tracks, TrackInfo{
+				ID:       track.ID(),       // The REAL WebRTC Track ID
+				Kind:     track.Kind().String(),
+				UserID:   p.UserID.String(),
+				Username: p.Username,
+			})
+		}
+		p.mu.RUnlock()
+	}
+	return tracks
+}
+
+// JoinRoom adds a participant
 func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username string) (*SFUParticipant, error) {
 	room := s.GetOrCreateRoom(roomID)
 
-	// Create WebRTC PeerConnection for this participant
-	config := webrtc.Configuration{
-		ICEServers: s.config.ICEServers,
+	// Create a dedicated context for this participant that survives the request
+	pCtx, pCancel := context.WithCancel(context.Background())
+
+	// Codec Enforcement (VP8/Opus)
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000, Channels: 0, SDPFmtpLine: "", RTCPFeedback: nil},
+		PayloadType:        96,
+	}, webrtc.RTPCodecTypeVideo); err != nil {
+		pCancel()
+		return nil, err
+	}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "", RTCPFeedback: nil},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		pCancel()
+		return nil, err
 	}
 
-	pc, err := webrtc.NewPeerConnection(config)
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(webrtc.SettingEngine{}))
+	
+	config := webrtc.Configuration{ICEServers: s.config.ICEServers}
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
+		pCancel()
 		return nil, err
 	}
 
-	// Add Transceivers to allow receiving media even if we don't send any initially
-	// This ensures the initial Offer has m-lines for the client to send media on
-	_, err = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionRecvonly,
-	})
-	if err != nil {
-		return nil, err
-	}
-	_, err = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionRecvonly,
-	})
-	if err != nil {
-		return nil, err
+	// Allow receiving audio/video
+	for _, kind := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeVideo, webrtc.RTPCodecTypeAudio} {
+		if _, err := pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{
+			Direction: webrtc.RTPTransceiverDirectionRecvonly,
+		}); err != nil {
+			pc.Close()
+			pCancel()
+			return nil, err
+		}
 	}
 
 	participant := &SFUParticipant{
 		UserID:       userID,
 		Username:     username,
 		pc:           pc,
-		localTracks:  make(map[string]*webrtc.TrackLocalStaticRTP),
-		remoteTracks: make(map[string]*webrtc.TrackRemote),
-		room:         room,
-		sfu:          s,
-		logger:       room.logger.With("user_id", userID, "username", username),
+		localTracks:   make(map[string]*webrtc.TrackLocalStaticRTP),
+		remoteTracks:  make(map[string]*webrtc.TrackRemote),
+		subscribers:   make(map[string][]*webrtc.TrackLocalStaticRTP),
+		subscriptions: make(map[string]uuid.UUID),
+		room:          room,
+		sfu:           s,
+		logger:        room.logger.With("user_id", userID),
+		ctx:           pCtx, // Use this for forwardTrack
+		cancel:        pCancel,
 	}
 
-	// Set up track handler - when this participant sends media, forward to others
 	pc.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		participant.handleIncomingTrack(ctx, remoteTrack, receiver)
+		// Use the Participant's Long-Lived Context, NOT reqCtx
+		participant.handleIncomingTrack(participant.ctx, remoteTrack, receiver)
 	})
 
-	// Handle ICE candidates
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate == nil {
-			return
+		if candidate != nil {
+			// Use the Participant's Context
+			participant.sendICECandidate(participant.ctx, candidate)
 		}
-		participant.sendICECandidate(ctx, candidate)
 	})
 
-	// Handle connection state changes
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		participant.logger.Info("connection state changed", "state", state.String())
 		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
-			// Clean up on disconnect
 			room.RemoveParticipant(userID)
 			if room.ParticipantCount() == 0 {
 				s.DeleteRoom(roomID)
@@ -188,53 +250,68 @@ func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username s
 		}
 	})
 
-	// Add participant to room
 	room.AddParticipant(participant)
 
-	// Add existing tracks from other participants to this new participant
+	// Subscribe to existing tracks
 	room.mu.RLock()
 	for _, other := range room.participants {
 		if other.UserID == userID {
 			continue
 		}
-		// Add other participant's tracks to this participant's connection
 		other.mu.RLock()
 		for _, remoteTrack := range other.remoteTracks {
-			participant.subscribeToTrack(other.UserID, other.Username, remoteTrack, false) // false = don't negotiate yet, initial offer covers it
+			// Don't negotiate yet; the initial offer covers this
+			participant.subscribeToTrack(ctx, other.UserID, remoteTrack, false)
 		}
 		other.mu.RUnlock()
 	}
 	room.mu.RUnlock()
 
-	participant.logger.Info("participant joined SFU room")
 	return participant, nil
 }
 
-// handleIncomingTrack processes media received from a participant
 func (p *SFUParticipant) handleIncomingTrack(ctx context.Context, remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-	p.logger.Info("received track", "kind", remoteTrack.Kind().String(), "track_id", remoteTrack.ID())
-
 	p.mu.Lock()
 	p.remoteTracks[remoteTrack.ID()] = remoteTrack
 	p.mu.Unlock()
 
-	// Forward this track to all other participants
+	// Forward to others
 	p.room.mu.RLock()
 	for _, other := range p.room.participants {
 		if other.UserID == p.UserID {
 			continue
 		}
-		other.subscribeToTrack(p.UserID, p.Username, remoteTrack, true) // true = trigger renegotiation for existing participant
+		// True = Trigger negotiation because connection is already established
+		other.subscribeToTrack(ctx, p.UserID, remoteTrack, true)
 	}
 	p.room.mu.RUnlock()
 
-	// Read RTP packets and forward to all subscribers
 	go p.forwardTrack(ctx, remoteTrack)
 }
 
-// subscribeToTrack adds a remote track to this participant's connection
-func (p *SFUParticipant) subscribeToTrack(senderID uuid.UUID, senderName string, remoteTrack *webrtc.TrackRemote, negotiate bool) {
-	// Create a local track to send to this participant
+// AddSubscriber adds a subscriber for a specific track
+func (p *SFUParticipant) AddSubscriber(trackID string, sub *webrtc.TrackLocalStaticRTP) {
+	p.subscribersMu.Lock()
+	defer p.subscribersMu.Unlock()
+	p.subscribers[trackID] = append(p.subscribers[trackID], sub)
+}
+
+// RemoveSubscriber removes a subscriber
+func (p *SFUParticipant) RemoveSubscriber(trackID string, sub *webrtc.TrackLocalStaticRTP) {
+	p.subscribersMu.Lock()
+	defer p.subscribersMu.Unlock()
+
+	subs := p.subscribers[trackID]
+	for i, s := range subs {
+		if s == sub {
+			// Remove element
+			p.subscribers[trackID] = append(subs[:i], subs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (p *SFUParticipant) subscribeToTrack(ctx context.Context, senderID uuid.UUID, remoteTrack *webrtc.TrackRemote, negotiate bool) {
 	localTrack, err := webrtc.NewTrackLocalStaticRTP(
 		remoteTrack.Codec().RTPCodecCapability,
 		remoteTrack.ID(),
@@ -245,41 +322,111 @@ func (p *SFUParticipant) subscribeToTrack(senderID uuid.UUID, senderName string,
 		return
 	}
 
-	// Add the track to our peer connection
 	sender, err := p.pc.AddTrack(localTrack)
 	if err != nil {
 		p.logger.Error("failed to add track", "error", err)
 		return
 	}
 
-	// Handle RTCP packets (for things like PLI/NACK)
+	// Read RTCP from receiver (needed for PLI)
+	// Read RTCP from receiver (needed for PLI)
 	go func() {
 		rtcpBuf := make([]byte, 1500)
 		for {
-			if _, _, rtcpErr := sender.Read(rtcpBuf); rtcpErr != nil {
+			n, _, rtcpErr := sender.Read(rtcpBuf)
+			if rtcpErr != nil {
 				return
+			}
+
+			// FIX 5: Handle RTCP Feedback (PLI/NACK)
+			pkts, err := rtcp.Unmarshal(rtcpBuf[:n])
+			if err != nil {
+				continue
+			}
+
+			for _, pkt := range pkts {
+				switch pkt.(type) {
+				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+					// User needs a keyframe! Relay this request to the original sender.
+					p.sfu.requestKeyframe(remoteTrack.ID(), p.room.ID)
+				}
 			}
 		}
 	}()
 
 	p.mu.Lock()
 	p.localTracks[remoteTrack.ID()] = localTrack
+	p.subscriptions[remoteTrack.ID()] = senderID
 	p.mu.Unlock()
 
-	p.logger.Info("subscribed to track", "from_user", senderName, "track_id", remoteTrack.ID())
+	// Register with sender
+	p.room.mu.RLock()
+	sfuSender := p.room.participants[senderID]
+	p.room.mu.RUnlock()
+
+	if sfuSender != nil {
+		sfuSender.AddSubscriber(remoteTrack.ID(), localTrack)
+	}
+
+	// FIX 3: Request Keyframe (PLI) immediately so new subscriber gets image
+	p.sendPLI(remoteTrack)
 
 	if negotiate {
-		p.logger.Info("negotiation needed after adding track")
-		offer, err := p.CreateOffer(context.Background())
-		if err != nil {
-			p.logger.Error("failed to create offer for renegotiation", "error", err)
-			return
-		}
-		p.sendOffer(context.Background(), offer)
+		p.processNegotiation(ctx)
 	}
 }
 
-// forwardTrack reads RTP packets from a remote track and writes to all local tracks
+// FIX 2: Negotiation Queue
+func (p *SFUParticipant) processNegotiation(ctx context.Context) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.isNegotiating {
+		p.negotiationPending = true
+		return
+	}
+
+	p.isNegotiating = true
+	p.negotiationPending = false
+
+	go func() {
+		// Small delay to debounce multiple track additions
+		time.Sleep(50 * time.Millisecond)
+		
+		offer, err := p.CreateOffer(ctx)
+		if err != nil {
+			p.logger.Error("failed to create offer", "error", err)
+			p.mu.Lock()
+			p.isNegotiating = false
+			p.mu.Unlock()
+			return
+		}
+		p.sendOffer(ctx, offer)
+	}()
+}
+
+func (p *SFUParticipant) sendPLI(track *webrtc.TrackRemote) {
+	// Find the participant who owns this remote track
+	p.room.mu.RLock()
+	defer p.room.mu.RUnlock()
+
+	for _, participant := range p.room.participants {
+		participant.mu.RLock()
+		if _, ok := participant.remoteTracks[track.ID()]; ok {
+			// Found the sender, send PLI to their PC
+			err := participant.pc.WriteRTCP([]rtcp.Packet{
+				&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+			})
+			if err != nil {
+				p.logger.Error("failed to send PLI", "error", err)
+			}
+			participant.mu.RUnlock()
+			return
+		}
+		participant.mu.RUnlock()
+	}
+}
+
 func (p *SFUParticipant) forwardTrack(ctx context.Context, remoteTrack *webrtc.TrackRemote) {
 	for {
 		select {
@@ -290,79 +437,150 @@ func (p *SFUParticipant) forwardTrack(ctx context.Context, remoteTrack *webrtc.T
 
 		rtp, _, err := remoteTrack.ReadRTP()
 		if err != nil {
-			p.logger.Debug("track read ended", "track_id", remoteTrack.ID(), "error", err)
 			return
 		}
 
-		// Forward to all other participants
-		p.room.mu.RLock()
-		for _, other := range p.room.participants {
-			if other.UserID == p.UserID {
-				continue
-			}
-			other.mu.RLock()
-			if localTrack, ok := other.localTracks[remoteTrack.ID()]; ok {
-				if err := localTrack.WriteRTP(rtp); err != nil {
-					other.logger.Debug("failed to write RTP", "error", err)
+		// Optimized: Use internal subscribers map, no room lock needed
+		p.subscribersMu.RLock()
+		// Copy subscribers to avoid holding lock during write
+		targets := make([]*webrtc.TrackLocalStaticRTP, len(p.subscribers[remoteTrack.ID()]))
+		copy(targets, p.subscribers[remoteTrack.ID()])
+		p.subscribersMu.RUnlock()
+
+		// Write to targets
+		for _, target := range targets {
+			// FIX 4: Deep Copy the packet so SSRC rewriting doesn't race
+			packetCopy := *rtp
+			packetCopy.Header = rtp.Header   // Shallow copy header struct
+			packetCopy.Payload = rtp.Payload // Payload slice matches (safe to read shared)
+
+			// WriteRTP will modify the Header.SSRC of packetCopy, not the original rtp
+			if err := target.WriteRTP(&packetCopy); err != nil {
+				if errors.Is(err, io.ErrClosedPipe) {
+					// Clean up closed pipe to prevent repeated errors
+					p.RemoveSubscriber(remoteTrack.ID(), target)
 				}
 			}
-			other.mu.RUnlock()
 		}
-		p.room.mu.RUnlock()
 	}
 }
 
-// sendICECandidate sends an ICE candidate to the participant via pubsub
+func (p *SFUParticipant) HandleAnswer(ctx context.Context, sdp string) error {
+	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}
+	if err := p.pc.SetRemoteDescription(answer); err != nil {
+		return err
+	}
+
+	// Check if pending negotiation exists
+	p.mu.Lock()
+	p.isNegotiating = false
+	pending := p.negotiationPending
+	p.mu.Unlock()
+
+	if pending {
+		p.processNegotiation(ctx)
+	}
+	return nil
+}
+
+// Helpers for offer/candidate/close remain similar...
 func (p *SFUParticipant) sendICECandidate(ctx context.Context, candidate *webrtc.ICECandidate) {
-	candidateJSON, err := json.Marshal(candidate.ToJSON())
-	if err != nil {
+	p.mu.Lock()
+	// FIX 13: Candidate Race - Buffer if offer not sent (no local description)
+	if p.pc.CurrentLocalDescription() == nil {
+		p.pendingCandidates = append(p.pendingCandidates, candidate)
+		p.mu.Unlock()
 		return
 	}
+	p.mu.Unlock()
 
+	p.emitCandidate(ctx, candidate)
+}
+
+func (p *SFUParticipant) emitCandidate(ctx context.Context, candidate *webrtc.ICECandidate) {
+	candidateJSON, _ := json.Marshal(candidate.ToJSON())
 	payload := map[string]interface{}{
 		"room_id":   p.room.ID.String(),
-		"from_id":   "server", // SFU is the sender
+		"from_id":   "server",
 		"candidate": string(candidateJSON),
 	}
-	payloadBytes, _ := json.Marshal(payload)
-
+	bytes, _ := json.Marshal(payload)
 	msg := &pubsub.Message{
 		Topic:   pubsub.Topics.User(p.UserID.String()),
-		Type:    EventTypeCallICECandidate,
-		Payload: payloadBytes,
+		Type:    "sfu.candidate", // Matches handler constant
+		Payload: bytes,
 	}
 	_ = p.sfu.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
-// sendOffer sends an SDP offer to the participant via pubsub
 func (p *SFUParticipant) sendOffer(ctx context.Context, sdp string) {
-	payload := map[string]interface{}{
-		"room_id": p.room.ID.String(),
-		"sdp":     sdp,
-	}
-	payloadBytes, _ := json.Marshal(payload)
-
+	payload := map[string]interface{}{"room_id": p.room.ID.String(), "sdp": sdp}
+	bytes, _ := json.Marshal(payload)
 	msg := &pubsub.Message{
 		Topic:   pubsub.Topics.User(p.UserID.String()),
-		Type:    EventTypeSFUOffer, // This should be defined in protocol.go, otherwise use "sfu.offer" string or check constant
-		Payload: payloadBytes,
+		Type:    "sfu.offer", // Matches handler constant
+		Payload: bytes,
 	}
-	// Note: protocol.go defines EventTypeSFUOffer as "sfu.offer"
 	_ = p.sfu.pubsub.Publish(ctx, msg.Topic, msg)
+
+	// FIX 13: Flush pending candidates after offer is sent
+	p.mu.Lock()
+	candidates := p.pendingCandidates
+	p.pendingCandidates = nil
+	p.mu.Unlock()
+
+	for _, c := range candidates {
+		p.emitCandidate(ctx, c)
+	}
 }
 
-// HandleOffer processes an SDP offer from the participant
-func (p *SFUParticipant) HandleOffer(ctx context.Context, sdp string) (string, error) {
-	offer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  sdp,
-	}
+func (p *SFUParticipant) HandleICECandidate(ctx context.Context, cand string) error {
+	var i webrtc.ICECandidateInit
+	json.Unmarshal([]byte(cand), &i)
+	return p.pc.AddICECandidate(i)
+}
 
+func (p *SFUParticipant) CreateOffer(ctx context.Context) (string, error) {
+	offer, err := p.pc.CreateOffer(nil)
+	if err != nil {
+		return "", err
+	}
+	if err := p.pc.SetLocalDescription(offer); err != nil {
+		return "", err
+	}
+	return offer.SDP, nil
+}
+
+func (p *SFUParticipant) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.cancel() // FIX 11: Kill all forwardTrack loops
+
+	// Clean up subscriptions from upstream senders
+	p.room.mu.RLock()
+	for trackID, senderID := range p.subscriptions {
+		if sender := p.room.participants[senderID]; sender != nil {
+			if localTrack, ok := p.localTracks[trackID]; ok {
+				sender.RemoveSubscriber(trackID, localTrack)
+			}
+		}
+	}
+	p.room.mu.RUnlock()
+
+	if p.pc != nil {
+		return p.pc.Close()
+	}
+	return nil
+}
+
+// HandleOffer handles an offer from the client (renegotiation initiated by client)
+func (p *SFUParticipant) HandleOffer(ctx context.Context, sdp string) (string, error) {
+	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}
 	if err := p.pc.SetRemoteDescription(offer); err != nil {
 		return "", err
 	}
 
-	// Create answer
 	answer, err := p.pc.CreateAnswer(nil)
 	if err != nil {
 		return "", err
@@ -375,108 +593,39 @@ func (p *SFUParticipant) HandleOffer(ctx context.Context, sdp string) (string, e
 	return answer.SDP, nil
 }
 
-// HandleAnswer processes an SDP answer from the participant
-func (p *SFUParticipant) HandleAnswer(ctx context.Context, sdp string) error {
-	answer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeAnswer,
-		SDP:  sdp,
-	}
-
-	return p.pc.SetRemoteDescription(answer)
-}
-
-// HandleICECandidate adds an ICE candidate from the participant
-func (p *SFUParticipant) HandleICECandidate(ctx context.Context, candidateJSON string) error {
-	var candidate webrtc.ICECandidateInit
-	if err := json.Unmarshal([]byte(candidateJSON), &candidate); err != nil {
-		return err
-	}
-	return p.pc.AddICECandidate(candidate)
-}
-
-// CreateOffer creates an SDP offer to send to the participant
-func (p *SFUParticipant) CreateOffer(ctx context.Context) (string, error) {
-	offer, err := p.pc.CreateOffer(nil)
-	if err != nil {
-		return "", err
-	}
-
-	if err := p.pc.SetLocalDescription(offer); err != nil {
-		return "", err
-	}
-
-	return offer.SDP, nil
-}
-
-// Close closes the participant's connection
-func (p *SFUParticipant) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.pc != nil {
-		return p.pc.Close()
-	}
-	return nil
-}
-
-// AddParticipant adds a participant to the room
 func (r *SFURoom) AddParticipant(p *SFUParticipant) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.participants[p.UserID] = p
 }
 
-// RemoveParticipant removes a participant from the room
-func (r *SFURoom) RemoveParticipant(userID uuid.UUID) {
+func (r *SFURoom) RemoveParticipant(u uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	if p, ok := r.participants[userID]; ok {
-		_ = p.Close()
-		delete(r.participants, userID)
+	if p, ok := r.participants[u]; ok {
+		p.Close()
+		delete(r.participants, u)
 	}
 }
 
-// GetParticipant returns a participant by ID
-func (r *SFURoom) GetParticipant(userID uuid.UUID) *SFUParticipant {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.participants[userID]
-}
-
-// ParticipantCount returns the number of participants
 func (r *SFURoom) ParticipantCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.participants)
 }
 
-// GetParticipantList returns info about all participants
+func (r *SFURoom) GetParticipant(u uuid.UUID) *SFUParticipant {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.participants[u]
+}
+
 func (r *SFURoom) GetParticipantList() []Participant {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	list := make([]Participant, 0, len(r.participants))
+	var list []Participant
 	for _, p := range r.participants {
-		hasVideo := false
-		hasAudio := false
-
-		p.mu.RLock()
-		for _, t := range p.localTracks {
-			if t.Kind() == webrtc.RTPCodecTypeVideo {
-				hasVideo = true
-			} else if t.Kind() == webrtc.RTPCodecTypeAudio {
-				hasAudio = true
-			}
-		}
-		p.mu.RUnlock()
-
-		list = append(list, Participant{
-			UserID:   p.UserID,
-			Username: p.Username,
-			HasVideo: hasVideo,
-			HasAudio: hasAudio,
-		})
+		list = append(list, Participant{UserID: p.UserID, Username: p.Username})
 	}
 	return list
 }

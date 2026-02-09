@@ -146,6 +146,14 @@ func (r *Room) ParticipantCount() int {
 	return len(r.Participants)
 }
 
+// HasParticipant checks if a user is in the room
+func (r *Room) HasParticipant(userID uuid.UUID) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.Participants[userID]
+	return ok
+}
+
 // Manager handles WebRTC call rooms
 type Manager struct {
 	rooms  map[uuid.UUID]*Room
@@ -271,6 +279,43 @@ func (m *Manager) LeaveCall(ctx context.Context, roomID, userID uuid.UUID, usern
 	}
 
 	m.logger.Info("user left call", "room_id", roomID, "user_id", userID)
+}
+
+// HandleDisconnect cleans up a user from all rooms (used for unexpected disconnects)
+func (m *Manager) HandleDisconnect(ctx context.Context, userID uuid.UUID) {
+	// 1. Identify rooms the user is in.
+	// We hold the lock only to iterate the map. We don't want to hold it while calling LeaveCall
+	// because LeaveCall might try to lock m.mu again (via DeleteRoom).
+	var roomsToLeave []uuid.UUID
+
+	m.mu.RLock()
+	for roomID, room := range m.rooms {
+		if room.HasParticipant(userID) {
+			roomsToLeave = append(roomsToLeave, roomID)
+		}
+	}
+	m.mu.RUnlock()
+
+	// 2. Remove user from those rooms
+	for _, roomID := range roomsToLeave {
+		m.logger.Info("cleaning up disconnected user from room", "user_id", userID, "room_id", roomID)
+		// We might not have the username here, but LeaveCall mainly uses it for logging/notification.
+		// We can try to get it from the room before leaving if needed, or pass empty.
+		// The current LeaveCall implementation passes username to event.
+		// Optimally we get it from the participant struct in the room.
+		
+		var username string
+		room := m.GetRoom(roomID)
+		if room != nil {
+			room.mu.RLock()
+			if p, ok := room.Participants[userID]; ok {
+				username = p.Username
+			}
+			room.mu.RUnlock()
+		}
+
+		m.LeaveCall(ctx, roomID, userID, username)
+	}
 }
 
 // GetConfig returns the ICE server configuration

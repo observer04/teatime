@@ -293,8 +293,29 @@ export function useWebRTC(userId) {
     };
 
     // Log negotiation needed events
-    pc.onnegotiationneeded = () => {
+    pc.onnegotiationneeded = async () => {
       console.log('Negotiation needed for peer:', peerId, 'isInitiator:', isInitiator);
+      if (callModeRef.current === 'sfu') return; // Only for P2P
+      
+      // Perfect negotiation logic
+      try {
+          makingOfferRef.current = true;
+          await pc.setLocalDescription(); // Create and set local offer
+          
+          // Send offer to signaling server
+          const roomId = callRoomIdRef.current;
+          if (roomId) {
+            sendMessage('call.offer', {
+                room_id: roomId,
+                sdp: JSON.stringify(pc.localDescription),
+                target_id: peerId
+            });
+          }
+      } catch (err) {
+          console.error('Error during negotiation:', err);
+      } finally {
+          makingOfferRef.current = false;
+      }
     };
 
     // Process any pending ICE candidates
@@ -309,7 +330,7 @@ export function useWebRTC(userId) {
     }
 
     return pc;
-  }, [localStream]); // Only depend on localStream for re-creation logging, actual values come from refs
+  }, [localStream, sendMessage]); // Only depend on localStream for re-creation logging, actual values come from refs
 
   // Track cleanup timers to prevent race conditions
   const cleanupTimersRef = React.useRef({
@@ -470,7 +491,9 @@ export function useWebRTC(userId) {
       // Reset tracking refs for new call
       hasEverHadParticipants.current = false;
       maxParticipantCount.current = 0;
-      
+      ignoreOfferRef.current = false; // Reset glare state
+      isPoliteRef.current = false; // Reset politeness
+
       // Set roomId in both state and ref immediately
       setCallRoomId(roomId);
       callRoomIdRef.current = roomId;
@@ -539,10 +562,13 @@ export function useWebRTC(userId) {
     // Reset all tracking refs
     hasEverHadParticipants.current = false;
     maxParticipantCount.current = 0;
+    ignoreOfferRef.current = false;
+    isPoliteRef.current = false;
+    makingOfferRef.current = false;
+    isSettingRemoteAnswerPendingRef.current = false;
 
     setIsInCall(false);
     setCallRoomId(null);
-    callRoomIdRef.current = null;
     callRoomIdRef.current = null;
     setCallMode('p2p');
     callModeRef.current = 'p2p';
@@ -556,8 +582,18 @@ export function useWebRTC(userId) {
     if (localStream) {
       const audioTrack = localStream.getAudioTracks()[0];
       if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsMuted(!audioTrack.enabled);
+        const newEnabled = !audioTrack.enabled;
+        audioTrack.enabled = newEnabled;
+        setIsMuted(!newEnabled);
+        
+        // Signal mute state to others
+        if (callRoomIdRef.current) {
+          wsService.send('call.mute_update', {
+            room_id: callRoomIdRef.current,
+            kind: 'audio',
+            muted: !newEnabled
+          });
+        }
       }
     }
   }, [localStream]);
@@ -567,10 +603,49 @@ export function useWebRTC(userId) {
     if (localStream) {
       const videoTrack = localStream.getVideoTracks()[0];
       if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsVideoOff(!videoTrack.enabled);
+        const newEnabled = !videoTrack.enabled;
+        videoTrack.enabled = newEnabled;
+        setIsVideoOff(!newEnabled);
+        
+        // Signal video state to others
+        if (callRoomIdRef.current) {
+          wsService.send('call.mute_update', {
+            room_id: callRoomIdRef.current,
+            kind: 'video',
+            muted: !newEnabled
+          });
+        }
       }
     }
+  }, [localStream]);
+
+  // Handle SFU Device Switching
+  React.useEffect(() => {
+      const handleDeviceSwitch = async () => {
+          if (callModeRef.current !== 'sfu' || !sfuConnection.current || !localStream) return;
+          
+          console.log('SFU: Local stream changed (device switch), updating tracks...');
+          const pc = sfuConnection.current;
+          const senders = pc.getSenders();
+          
+          for (const track of localStream.getTracks()) {
+              const sender = senders.find(s => s.track && s.track.kind === track.kind);
+              if (sender) {
+                  console.log(`SFU: Replacing ${track.kind} track`);
+                  try {
+                    await sender.replaceTrack(track);
+                  } catch (err) {
+                      console.error('SFU: Failed to replace track:', err);
+                  }
+              } else {
+                  // If no sender exists, we might need to addTrack (renegotiation)
+                  // But for simple camera switch, replaceTrack is usually enough if we started with video
+                  console.warn(`SFU: No sender found for ${track.kind} track`);
+              }
+          }
+      };
+      
+      handleDeviceSwitch();
   }, [localStream]);
 
   // Handle incoming call config (after joining)
@@ -619,6 +694,25 @@ export function useWebRTC(userId) {
       // Check if this is SFU mode
       const mode = payload.mode || 'p2p';
       setCallMode(mode);
+      callModeRef.current = mode; // Keep ref in sync
+
+      // Determine Politeness for P2P calls
+      if (mode === 'p2p') {
+        // Find the other participant (assuming 1:1 P2P for now)
+        const myId = userId;
+        const otherPart = (payload.participants || []).find(p => p.user_id !== myId);
+        if (otherPart) {
+             // Lexicographical comparison: Lower ID = Polite (Yields)
+             // Higher ID = Impolite (Persists)
+             const isPolite = myId < otherPart.user_id;
+             isPoliteRef.current = isPolite;
+             console.log("Determined politeness:", isPolite ? 'Polite' : 'Impolite', "My ID:", myId, "Other:", otherPart.user_id);
+        } else {
+          // If no other participant, we are effectively the initiator and can be impolite by default
+          isPoliteRef.current = false;
+          console.log("No other participant found, defaulting to Impolite.");
+        }
+      }
       
       if (mode === 'sfu') {
         // SFU mode: wait for sfu.offer from server
@@ -626,34 +720,20 @@ export function useWebRTC(userId) {
         // Create SFU connection with local stream
         await createSFUConnection(localStreamRef.current);
       } else {
-        // P2P mode: Create offers to existing participants (we are the new joiner)
-        const otherParticipants = (payload.participants || []).filter(p => p.user_id !== userId);
+        // P2P mode:
+        // Initialize connections for all existing peers
+        // Ensure strictly lexicographical politeness
+        const myId = userId;
+        const otherParticipants = (payload.participants || []).filter(p => p.user_id !== myId);
         
         console.log('P2P mode - Other participants:', otherParticipants);
-        console.log('Will create offers to', otherParticipants.length, 'participants');
-        console.log('Current stream ref:', !!localStreamRef.current, 'tracks:', localStreamRef.current?.getTracks().length);
         
+        // Initialize connections for all existing peers
         for (const participant of otherParticipants) {
-          console.log('Creating peer connection and offer for:', participant.user_id, participant.username);
-          const pc = createPeerConnection(participant.user_id, participant.username, true);
-          
-          // Verify tracks were added
-          const senders = pc.getSenders();
-          console.log('Peer connection senders after creation:', senders.length, senders.map(s => s.track?.kind));
-          
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            
-            console.log('Sending offer to:', participant.user_id, 'SDP type:', offer.type);
-            wsService.send('call.offer', {
-              room_id: payload.room_id,
-              target_id: participant.user_id,
-              sdp: JSON.stringify(offer)
-            });
-          } catch (err) {
-            console.error('Failed to create offer for', participant.user_id, ':', err);
-          }
+            console.log('Initializing peer connection for:', participant.user_id);
+            // Initiate connection. If we are IMPOLITE (Initiator logic), we might start negotiation.
+            // If we are POLITE (Joiner), we might also trigger negotiation but will yield if glarin.
+            createPeerConnection(participant.user_id, participant.username, payload.is_initiator);
         }
       }
     };
@@ -661,6 +741,43 @@ export function useWebRTC(userId) {
     const unsubConfig = wsService.on('call.config', handleCallConfig);
     return () => unsubConfig();
   }, [userId, createPeerConnection, createSFUConnection]);
+
+  // Handle mute updates
+  React.useEffect(() => {
+      const handleMuteUpdate = (payload) => {
+          console.log('Received mute update:', payload);
+          setParticipants(prev => prev.map(p => {
+              // Note: payload structure depends on backend, assuming { user_id, kind, muted } added to payload by sender or broadcast?
+              // Looking at protocol.go, the EventType is call.mute_update.
+              // The payload sent by toggleMute has { room_id, kind, muted }.
+              // The backend needs to relay this WITH user_id.
+              // Assuming backend uses generic relay or we need to update backend too?
+              // Wait, protocol.go doesn't define a specific payload struct for this, so it might just be the raw map?
+              // If backend relays it as-is, it won't have user_id unless backend adds it or we send it.
+              // We should probably rely on `from_id` if using the generic relay, but `wsService` might strip it?
+              // The `wsService` usually gives us the parsed payload.
+              // Let's assume standard broadcast behavior sets `from_id` or we can't identify who muted.
+              // Actually, existing events like `call.offer` have `from_id`.
+              // Standard relay usually includes `user_id` or `from_id`.
+              // We'll check payload properties.
+              
+              // If payload uses `user_id` (like `participant_joined`) or `from_id` (like `call.offer`)
+              const targetId = payload.user_id || payload.from_id;
+              
+              if (p.user_id === targetId) {
+                  return {
+                      ...p,
+                      isMuted: payload.kind === 'audio' ? payload.muted : p.isMuted,
+                      isVideoOff: payload.kind === 'video' ? payload.muted : p.isVideoOff
+                  };
+              }
+              return p;
+          }));
+      };
+      
+      const unsubMute = wsService.on('call.mute_update', handleMuteUpdate);
+      return () => unsubMute();
+  }, []);
 
   // Handle participant joined
   React.useEffect(() => {
@@ -674,12 +791,17 @@ export function useWebRTC(userId) {
       
       setParticipants(prev => {
         if (prev.find(p => p.user_id === payload.user_id)) return prev;
-        const newParticipants = [...prev, { user_id: payload.user_id, username: payload.username }];
-        maxParticipantCount.current = Math.max(maxParticipantCount.current, newParticipants.filter(p => p.user_id !== userId).length);
-        return newParticipants;
+        return [...prev, { user_id: payload.user_id, username: payload.username }];
       });
-      
-      // The new participant will send us an offer, so we just wait
+
+      // P2P: Initialize peer connection for the new participant immediately
+      // This will assume WE are the impolite peer (existing user) vs the polite peer (joiner)
+      // Actually, we use ID-based politeness or just let 'perfect negotiation' handle it.
+      // But we MUST create the PC to be able to receive/send offers.
+      if (callModeRef.current !== 'sfu') {
+          console.log('P2P: New participant joined, creating connection:', payload.user_id);
+          createPeerConnection(payload.user_id, payload.username, true); 
+      }
     };
 
     const unsubJoined = wsService.on('call.participant_joined', handleParticipantJoined);
@@ -818,27 +940,41 @@ export function useWebRTC(userId) {
       console.log('Local stream ref available:', !!localStreamRef.current);
       console.log('Local stream ref tracks:', localStreamRef.current?.getTracks().map(t => t.kind));
       
-      // Create peer connection - uses refs internally to get current stream
-      const pc = createPeerConnection(payload.from_id, payload.from_name, false);
-      
-      // Double-check tracks were added
-      const senders = pc.getSenders();
-      console.log('Peer connection senders after creation:', senders.length, senders.map(s => s.track?.kind));
-      
-      // If no tracks were added (edge case), add them now
-      if (senders.length === 0 && localStreamRef.current) {
-        console.warn('No senders found, manually adding tracks now');
-        localStreamRef.current.getTracks().forEach(track => {
-          console.log('Late-adding track:', track.kind, track.id);
-          pc.addTrack(track, localStreamRef.current);
-        });
+      if (callModeRef.current === 'sfu') return; // Only for P2P
+
+      const pc = peerConnections.current.get(payload.from_id);
+      if (!pc) {
+        console.error('No peer connection for:', payload.from_id, 'when receiving offer.');
+        return;
+      }
+
+      // Perfect Negotiation / Glare Fix
+      const offerCollision = makingOfferRef.current || pc.signalingState !== 'stable';
+      ignoreOfferRef.current = false; // Reset for this offer
+
+      if (offerCollision) {
+          if (!isPoliteRef.current) {
+              // Impolite: Ignore their offer, keep trying to send ours
+              ignoreOfferRef.current = true;
+              console.log("Glare detected: Ignoring incoming offer (Impolite)");
+              return;
+          }
+          // Polite: Rollback and accept their offer
+          console.log("Glare detected: Yielding to incoming offer (Polite)");
+          // Rollback local description if we have one
+          if (pc.localDescription) {
+            await pc.setLocalDescription({ type: 'rollback' });
+          }
       }
       
+      // If we are polite, or if there is no collision, proceed.
       try {
         const offer = JSON.parse(payload.sdp);
         console.log('Setting remote description (offer)...');
+        isSettingRemoteAnswerPendingRef.current = true; // Indicate we are processing remote description
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        
+        isSettingRemoteAnswerPendingRef.current = false;
+
         // Flush any ICE candidates that arrived after createPeerConnection
         // but before setRemoteDescription completed
         const pendingOffer = pendingCandidates.current.get(payload.from_id);
@@ -856,7 +992,7 @@ export function useWebRTC(userId) {
         await pc.setLocalDescription(answer);
         
         console.log('Sending answer to:', payload.from_id);
-        wsService.send('call.answer', {
+        sendMessage('call.answer', {
           room_id: payload.room_id,
           target_id: payload.from_id,
           sdp: JSON.stringify(answer)
@@ -865,17 +1001,19 @@ export function useWebRTC(userId) {
         console.log('Answer sent successfully');
       } catch (err) {
         console.error('Failed to handle offer:', err);
+        isSettingRemoteAnswerPendingRef.current = false;
       }
     };
 
     const unsubOffer = wsService.on('call.offer', handleOffer);
     return () => unsubOffer();
-  }, [createPeerConnection]);
+  }, [createPeerConnection, sendMessage]);
 
   // Handle incoming answer
   React.useEffect(() => {
     const handleAnswer = async (payload) => {
       console.log('Received answer from:', payload.from_id);
+      if (callModeRef.current === 'sfu') return; // Only for P2P
       
       const pc = peerConnections.current.get(payload.from_id);
       if (!pc) {
@@ -909,14 +1047,23 @@ export function useWebRTC(userId) {
   // Handle incoming ICE candidate
   React.useEffect(() => {
     const handleIceCandidate = async (payload) => {
+      if (callModeRef.current === 'sfu') return; // Only for P2P
+
       const pc = peerConnections.current.get(payload.from_id);
       const candidate = JSON.parse(payload.candidate);
       
-      if (pc && pc.remoteDescription) {
+      if (pc && pc.remoteDescription && !isSettingRemoteAnswerPendingRef.current) {
         try {
+          // Ignore candidates if we are currently ignoring offers (glare state)
+          if (ignoreOfferRef.current) {
+               console.log("Ignoring candidate during glare resolution");
+               return;
+          }
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (err) {
-          console.error('Failed to add ICE candidate:', err);
+          if (!ignoreOfferRef.current) {
+            console.error('Failed to add ICE candidate:', err);
+          }
         }
       } else {
         // Queue the candidate for later
@@ -1039,23 +1186,40 @@ export function useWebRTC(userId) {
       console.log('SFU tracks update:', payload);
       
       // Update remote streams with user info
+      // Payload contains { tracks: [{ id, kind, user_id, username }] }
+      // NOTE: backend now sends the ACTUAL WebRTC Track ID in `id`.
+      
       const tracks = payload.tracks || [];
-      const trackMap = new Map();
+      const trackMap = new Map(); // TrackID -> UserInfo
       tracks.forEach(t => trackMap.set(t.id, { userId: t.user_id, username: t.username }));
       
       setRemoteStreams(prev => {
         const updated = { ...prev };
-        for (const [streamId, data] of Object.entries(updated)) {
-          const trackInfo = trackMap.get(streamId);
-          if (trackInfo) {
-            updated[streamId] = {
-              ...data,
-              userId: trackInfo.userId,
-              username: trackInfo.username
-            };
-          }
+        let hasChanges = false;
+        
+        // Iterate through all our active streams
+        for (const [streamId, streamData] of Object.entries(updated)) {
+            // Check each track in this stream to see if it matches one of our identified tracks
+            const stream = streamData.stream;
+            if (!stream) continue;
+            
+            for (const track of stream.getTracks()) {
+                const info = trackMap.get(track.id);
+                if (info) {
+                    // Match found! Map this stream to this user
+                    if (updated[streamId].userId !== info.userId) {
+                        updated[streamId] = {
+                            ...updated[streamId],
+                            userId: info.userId,
+                            username: info.username
+                        };
+                        hasChanges = true;
+                    }
+                }
+            }
         }
-        return updated;
+        
+        return hasChanges ? updated : prev;
       });
     };
 
@@ -1132,17 +1296,38 @@ export function useWebRTC(userId) {
       }
     };
 
+    const handleCallMigration = (payload) => {
+      console.log('Call migration requested:', payload);
+      // Verify we are in the correct room
+      if (isInCall && callRoomIdRef.current === payload.room_id) {
+         console.log('Migrating call to Group/SFU mode...');
+         
+         // 1. Leave current P2P call (cleans up peer connections and state)
+         leaveCall();
+         
+         // 2. Re-join after a short delay to allow cleanup to finish
+         // The new join will be routed to SFU by the backend because of the split-brain fix
+         setTimeout(() => {
+           console.log('Re-joining call in SFU mode...');
+           joinCall(payload.room_id, !isVideoOff);
+         }, 800);
+      }
+    };
+
     const unsubIncoming = wsService.on('call.incoming', handleIncomingCall);
     const unsubCancelled = wsService.on('call.cancelled', handleCallCancelled);
     const unsubEnded = wsService.on('call.ended', handleCallEnded);
     const unsubDeclined = wsService.on('call.declined', handleCallDeclined);
+    const unsubMigration = wsService.on('call.migration', handleCallMigration);
+
     return () => {
       unsubIncoming();
       unsubCancelled();
       unsubEnded();
       unsubDeclined();
+      unsubMigration();
     };
-  }, [isInCall, incomingCall, leaveCall]);
+  }, [isInCall, incomingCall, leaveCall, userId, joinCall, isVideoOff]);
 
   // Accept incoming call
   const acceptCall = React.useCallback(async (withVideo = true) => {

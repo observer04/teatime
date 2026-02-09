@@ -118,11 +118,25 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		}
 	}
 
+	// If we are creating a NEW room (or re-creating one after restart),
+	// we must ensure there are no "dangling" active calls in the DB for this room.
+	// This fixes the "Zombie Call" bug where DB says ACTIVE but server memory is empty.
+	if isInitiator && h.callRepo != nil {
+		// Prepare to close any stale calls
+		activeCallID, err := h.callRepo.GetActiveCallID(ctx, roomID)
+		if err == nil && activeCallID != uuid.Nil {
+			h.logger.Warn("found dangling active call for new room, cleaning up", 
+				"room_id", roomID, "call_id", activeCallID)
+			_ = h.callRepo.EndCall(ctx, activeCallID)
+		}
+	}
+
 	// Return config with ICE servers and current participants
 	config := &CallConfigPayload{
 		RoomID:       roomID,
 		ICEServers:   h.manager.GetConfig().GetICEServers(),
 		Participants: room.GetParticipants(),
+		IsInitiator:  isInitiator,
 	}
 
 	h.logger.Info("sending call config",
@@ -247,6 +261,12 @@ func (h *CallHandler) HandleOffer(ctx context.Context, sigCtx *SignalingContext,
 		return &CallError{Code: "no_call", Message: "No active call in this room"}
 	}
 
+	// SECURITY: Verify target is actually in the room
+	if !room.HasParticipant(targetID) {
+		h.logger.Warn("call.offer target not found in room", "target_id", targetID, "room_id", roomID)
+		return &CallError{Code: "target_not_found", Message: "Target participant not found in room"}
+	}
+
 	// Relay the offer to target user via pubsub
 	relayPayload := map[string]interface{}{
 		"room_id":   roomID.String(),
@@ -289,6 +309,12 @@ func (h *CallHandler) HandleAnswer(ctx context.Context, sigCtx *SignalingContext
 		return &CallError{Code: "no_call", Message: "No active call in this room"}
 	}
 
+	// SECURITY: Verify target is actually in the room
+	if !room.HasParticipant(targetID) {
+		h.logger.Warn("call.answer target not found in room", "target_id", targetID, "room_id", roomID)
+		return &CallError{Code: "target_not_found", Message: "Target participant not found in room"}
+	}
+
 	// Relay the answer to target user
 	relayPayload := map[string]interface{}{
 		"room_id":   roomID.String(),
@@ -327,6 +353,12 @@ func (h *CallHandler) HandleICECandidate(ctx context.Context, sigCtx *SignalingC
 	room := h.manager.GetRoom(roomID)
 	if room == nil {
 		return &CallError{Code: "no_call", Message: "No active call in this room"}
+	}
+
+	// SECURITY: Verify target is actually in the room
+	if !room.HasParticipant(targetID) {
+		h.logger.Warn("call.candidate target not found in room", "target_id", targetID, "room_id", roomID)
+		return &CallError{Code: "target_not_found", Message: "Target participant not found in room"}
 	}
 
 	// Relay the ICE candidate to target user
@@ -400,6 +432,44 @@ func (h *CallHandler) HandleDeclined(ctx context.Context, sigCtx *SignalingConte
 	return h.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
+// HandleReady processes a call.ready message
+func (h *CallHandler) HandleReady(ctx context.Context, sigCtx *SignalingContext, payload json.RawMessage) error {
+	var p struct {
+		RoomID string `json:"room_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return &CallError{Code: "invalid_payload", Message: "Invalid ready payload"}
+	}
+
+	roomID, err := uuid.Parse(p.RoomID)
+	if err != nil {
+		return &CallError{Code: "invalid_room", Message: "Invalid room ID"}
+	}
+
+	// Verify room exists and user is in it
+	room := h.manager.GetRoom(roomID)
+	if room == nil {
+		return &CallError{Code: "no_call", Message: "No active call in this room"}
+	}
+
+	h.logger.Info("relaying call.ready", "from", sigCtx.UserID, "room_id", roomID)
+
+	relayPayload := map[string]string{
+		"room_id": roomID.String(),
+		"from_id": sigCtx.UserID.String(),
+	}
+	payloadBytes, _ := json.Marshal(relayPayload)
+
+	// Broadcast to the room so the initiator receives it
+	msg := &pubsub.Message{
+		Topic:   pubsub.Topics.Room(roomID.String()),
+		Type:    EventTypeCallReady,
+		Payload: payloadBytes,
+	}
+
+	return h.pubsub.Publish(ctx, msg.Topic, msg)
+}
+
 // CallError represents an error during call handling
 type CallError struct {
 	Code    string
@@ -408,4 +478,11 @@ type CallError struct {
 
 func (e *CallError) Error() string {
 	return e.Message
+}
+
+// HandleDisconnect cleans up user from all rooms
+func (h *CallHandler) HandleDisconnect(ctx context.Context, userID uuid.UUID, username string) {
+	if h.manager != nil {
+		h.manager.HandleDisconnect(ctx, userID)
+	}
 }

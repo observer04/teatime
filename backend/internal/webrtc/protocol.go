@@ -19,6 +19,16 @@ const (
 	EventTypeCallDeclined  = "call.declined"  // Sent when someone declines the call
 	EventTypeCallCancelled = "call.cancelled" // Sent when caller cancels before answer
 	EventTypeCallEnded     = "call.ended"     // Sent when call ends
+	EventTypeCallReady     = "call.ready"     // Sent when participant is ready for offer
+	EventTypeCallMuteUpdate = "call.mute_update" // Sent when participant toggles mute/video
+	
+	// SFU Events
+	EventTypeSFUJoin      = "sfu.join"
+	EventTypeSFULeave     = "sfu.leave"
+	EventTypeSFUOffer     = "sfu.offer"
+	EventTypeSFUAnswer    = "sfu.answer"
+	EventTypeSFUCandidate = "sfu.candidate"
+	EventTypeSFUTracks    = "sfu.tracks"
 )
 
 // CallJoinPayload is sent by client to join a call
@@ -46,10 +56,11 @@ type CallAnswerPayload struct {
 }
 
 // CallICECandidatePayload contains ICE candidate info
+// CallICECandidatePayload contains ICE candidate info
 type CallICECandidatePayload struct {
-	RoomID    string `json:"room_id"`
-	TargetID  string `json:"target_id"`
-	Candidate string `json:"candidate"`
+	RoomID    string      `json:"room_id"`
+	TargetID  string      `json:"target_id"`
+	Candidate interface{} `json:"candidate"`
 }
 
 // CallParticipantEvent is sent when someone joins/leaves
@@ -65,6 +76,7 @@ type CallConfigPayload struct {
 	RoomID       uuid.UUID     `json:"room_id"`
 	ICEServers   []ICEServer   `json:"ice_servers"`
 	Participants []Participant `json:"participants"`
+	IsInitiator  bool          `json:"is_initiator"`
 }
 
 // CallErrorPayload is sent when an error occurs
