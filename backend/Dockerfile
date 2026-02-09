@@ -1,7 +1,7 @@
 # ==============================================================================
 # Build stage
 # ==============================================================================
-FROM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
 # Install git (needed for go mod download) and ca-certificates (for HTTPS)
 RUN apk add --no-cache git ca-certificates tzdata
@@ -17,7 +17,8 @@ COPY . .
 
 # Build with optimizations
 # CGO_ENABLED=0 for static binary, -ldflags for smaller binary
-RUN CGO_ENABLED=0 GOOS=linux go build \
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags="-w -s" \
     -o /app/server \
     ./cmd/server

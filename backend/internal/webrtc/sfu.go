@@ -137,6 +137,21 @@ func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username s
 		return nil, err
 	}
 
+	// Add Transceivers to allow receiving media even if we don't send any initially
+	// This ensures the initial Offer has m-lines for the client to send media on
+	_, err = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	_, err = pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	participant := &SFUParticipant{
 		UserID:       userID,
 		Username:     username,
@@ -185,7 +200,7 @@ func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username s
 		// Add other participant's tracks to this participant's connection
 		other.mu.RLock()
 		for _, remoteTrack := range other.remoteTracks {
-			participant.subscribeToTrack(other.UserID, other.Username, remoteTrack)
+			participant.subscribeToTrack(other.UserID, other.Username, remoteTrack, false) // false = don't negotiate yet, initial offer covers it
 		}
 		other.mu.RUnlock()
 	}
@@ -209,7 +224,7 @@ func (p *SFUParticipant) handleIncomingTrack(ctx context.Context, remoteTrack *w
 		if other.UserID == p.UserID {
 			continue
 		}
-		other.subscribeToTrack(p.UserID, p.Username, remoteTrack)
+		other.subscribeToTrack(p.UserID, p.Username, remoteTrack, true) // true = trigger renegotiation for existing participant
 	}
 	p.room.mu.RUnlock()
 
@@ -218,7 +233,7 @@ func (p *SFUParticipant) handleIncomingTrack(ctx context.Context, remoteTrack *w
 }
 
 // subscribeToTrack adds a remote track to this participant's connection
-func (p *SFUParticipant) subscribeToTrack(senderID uuid.UUID, senderName string, remoteTrack *webrtc.TrackRemote) {
+func (p *SFUParticipant) subscribeToTrack(senderID uuid.UUID, senderName string, remoteTrack *webrtc.TrackRemote, negotiate bool) {
 	// Create a local track to send to this participant
 	localTrack, err := webrtc.NewTrackLocalStaticRTP(
 		remoteTrack.Codec().RTPCodecCapability,
@@ -252,6 +267,16 @@ func (p *SFUParticipant) subscribeToTrack(senderID uuid.UUID, senderName string,
 	p.mu.Unlock()
 
 	p.logger.Info("subscribed to track", "from_user", senderName, "track_id", remoteTrack.ID())
+
+	if negotiate {
+		p.logger.Info("negotiation needed after adding track")
+		offer, err := p.CreateOffer(context.Background())
+		if err != nil {
+			p.logger.Error("failed to create offer for renegotiation", "error", err)
+			return
+		}
+		p.sendOffer(context.Background(), offer)
+	}
 }
 
 // forwardTrack reads RTP packets from a remote track and writes to all local tracks
@@ -306,6 +331,23 @@ func (p *SFUParticipant) sendICECandidate(ctx context.Context, candidate *webrtc
 		Type:    EventTypeCallICECandidate,
 		Payload: payloadBytes,
 	}
+	_ = p.sfu.pubsub.Publish(ctx, msg.Topic, msg)
+}
+
+// sendOffer sends an SDP offer to the participant via pubsub
+func (p *SFUParticipant) sendOffer(ctx context.Context, sdp string) {
+	payload := map[string]interface{}{
+		"room_id": p.room.ID.String(),
+		"sdp":     sdp,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	msg := &pubsub.Message{
+		Topic:   pubsub.Topics.User(p.UserID.String()),
+		Type:    EventTypeSFUOffer, // This should be defined in protocol.go, otherwise use "sfu.offer" string or check constant
+		Payload: payloadBytes,
+	}
+	// Note: protocol.go defines EventTypeSFUOffer as "sfu.offer"
 	_ = p.sfu.pubsub.Publish(ctx, msg.Topic, msg)
 }
 
