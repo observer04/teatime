@@ -292,4 +292,3 @@ func (h *OAuthHandlers) HandleSetUsername(w http.ResponseWriter, r *http.Request
 		"user":         user.ToPublic(),
 	})
 }
-

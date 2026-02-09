@@ -124,13 +124,13 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		ICEServers:   h.manager.GetConfig().GetICEServers(),
 		Participants: room.GetParticipants(),
 	}
-	
+
 	h.logger.Info("sending call config",
 		"room_id", roomID,
 		"user_id", sigCtx.UserID,
 		"participant_count", len(config.Participants),
 		"participants", config.Participants)
-	
+
 	return config, nil
 }
 
@@ -394,9 +394,9 @@ func (h *CallHandler) HandleDeclined(ctx context.Context, sigCtx *SignalingConte
 		Type:    EventTypeCallDeclined,
 		Payload: payloadBytes,
 	}
-	
+
 	h.logger.Info("relaying call declined", "from", sigCtx.UserID, "to", call.InitiatorID)
-	
+
 	return h.pubsub.Publish(ctx, msg.Topic, msg)
 }
 

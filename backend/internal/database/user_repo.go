@@ -308,4 +308,3 @@ func (r *UserRepository) UpdateUsername(ctx context.Context, userID uuid.UUID, u
 	`, userID, username)
 	return err
 }
-

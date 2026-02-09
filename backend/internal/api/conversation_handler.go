@@ -574,7 +574,7 @@ func (h *ConversationHandler) GetMessages(w http.ResponseWriter, r *http.Request
 				ownMsgIDs = append(ownMsgIDs, msg.ID)
 			}
 		}
-		
+
 		// Get receipt statuses in bulk
 		if len(ownMsgIDs) > 0 {
 			statuses, err := h.convs.GetMessageReceiptStatuses(r.Context(), ownMsgIDs)
