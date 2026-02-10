@@ -29,9 +29,9 @@ export function useWebRTC(userId) {
   // Incoming call state
   const [incomingCall, setIncomingCall] = React.useState(null); // { callId, conversationId, caller, callType, isGroup, conversationName }
   
-  // P2P: Store peer connections by user ID
   const peerConnections = React.useRef(new Map());
   const pendingCandidates = React.useRef(new Map()); // Store ICE candidates until connection is ready
+  const processedCandidates = React.useRef(new Set()); // Deduplication set for ICE candidates
   
   // CRITICAL: Use refs for values that need to be accessed in callbacks without stale closures
   const localStreamRef = React.useRef(null);
@@ -1049,6 +1049,14 @@ export function useWebRTC(userId) {
     const handleIceCandidate = async (payload) => {
       if (callModeRef.current === 'sfu') return; // Only for P2P
 
+      // FIX: Deduplicate candidates
+      const candidateKey = payload.candidate; // Raw JSON string is a good key
+      if (processedCandidates.current.has(candidateKey)) {
+          console.log('Ignoring duplicate ICE candidate');
+          return;
+      }
+      processedCandidates.current.add(candidateKey);
+
       const pc = peerConnections.current.get(payload.from_id);
       const candidate = JSON.parse(payload.candidate);
       
@@ -1360,6 +1368,34 @@ export function useWebRTC(userId) {
     setIncomingCall(null);
   }, [incomingCall]);
 
+  // Handle WebSocket connection changes (Reconnection Logic)
+  React.useEffect(() => {
+    const handleConnectionChange = (payload) => {
+      console.log('WebSocket connection status changed:', payload.status);
+      
+      if (payload.status === 'connected') {
+        const currentRoomId = callRoomIdRef.current;
+        // If we were in a call and lost connection, try to rejoin
+        if (currentRoomId && isInCall) {
+          console.log('Regained WebSocket connection, attempting to re-join room:', currentRoomId);
+          // Re-send join to ensure server knows we're here
+          wsService.send('call.join', { room_id: currentRoomId });
+          
+          // If SFU, we might need to restart ICE or re-negotiate
+          if (callModeRef.current === 'sfu' && sfuConnection.current) {
+            console.log('Triggering SFU ICE restart after reconnection');
+            if (sfuConnection.current.restartIce) {
+                sfuConnection.current.restartIce();
+            }
+          }
+        }
+      }
+    };
+
+    const unsubConnection = wsService.on('connection', handleConnectionChange);
+    return () => unsubConnection();
+  }, [isInCall]);
+
   // Cleanup on unmount
   React.useEffect(() => {
     // Copy refs to local variables for cleanup
@@ -1367,15 +1403,37 @@ export function useWebRTC(userId) {
     const sfuConn = sfuConnection.current;
     
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+      console.log('Component unmounting - cleaning up call resources');
+      
+      // FIX: Send leave signal on unmount!
+      if (callRoomIdRef.current) {
+         // Use the ref directly since we might be unmounting
+         const msgType = callModeRef.current === 'sfu' ? 'sfu.leave' : 'call.leave';
+         // Attempt to send if socket is still open
+         try {
+            wsService.send(msgType, { room_id: callRoomIdRef.current });
+         } catch (e) {
+             console.warn('Failed to send leave on unmount:', e);
+         }
+      }
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+            try {
+                track.stop();
+            } catch (e) { /* ignore */ }
+        });
       }
       peerConns.forEach(pc => pc.close());
       if (sfuConn) {
         sfuConn.close();
       }
+      
+      // Reset critical refs
+      callRoomIdRef.current = null;
+      localStreamRef.current = null;
     };
-  }, [localStream]);
+  }, []); // Empty dependency array = runs only on mount/unmount
 
   return {
     isInCall,

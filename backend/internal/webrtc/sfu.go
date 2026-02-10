@@ -601,10 +601,28 @@ func (r *SFURoom) AddParticipant(p *SFUParticipant) {
 
 func (r *SFURoom) RemoveParticipant(u uuid.UUID) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if p, ok := r.participants[u]; ok {
-		p.Close()
+	p, ok := r.participants[u]
+	if ok {
 		delete(r.participants, u)
+	}
+	r.mu.Unlock()
+
+	if ok && p != nil {
+		p.Close()
+		
+		// Trigger room deletion check if empty
+		r.mu.RLock()
+		count := len(r.participants)
+		r.mu.RUnlock()
+		
+		if count == 0 {
+			// Note: We need to access sfu to delete room. 
+			// p.sfu.DeleteRoom(r.ID) is called in OnConnectionStateChange, 
+			// but we should probably ensure it happens here too or rely on the caller.
+			// The original code called s.DeleteRoom if count == 0 inside OnConnectionStateChange.
+			// This method is called by OnConnectionStateChange.
+			// Let's leave the deletion logic to the caller or OnConnectionStateChange to avoid circular locking if DeleteRoom locks sfu.
+		}
 	}
 }
 
