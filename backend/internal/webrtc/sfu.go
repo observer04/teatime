@@ -51,13 +51,15 @@ type SFUParticipant struct {
 	// Renegotiation handling
 	isNegotiating      bool
 	negotiationPending bool
+	negotiationTimer   *time.Timer
 
 	// Lifecycle management
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	// Candidate Buffering
-	pendingCandidates []*webrtc.ICECandidate
+	pendingCandidates       []*webrtc.ICECandidate
+	remotePendingCandidates []webrtc.ICECandidateInit
 
 	// Track subscriptions (Sender side)
 	subscribers   map[string][]*webrtc.TrackLocalStaticRTP // trackID -> list of subscribers
@@ -72,6 +74,22 @@ type TrackInfo struct {
 	Kind     string `json:"kind"`
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
+}
+
+// trackKey creates a composite key from senderID and trackID to avoid collisions
+// when multiple senders produce tracks with the same ID (e.g. both have "audio").
+func trackKey(senderID uuid.UUID, trackID string) string {
+	return senderID.String() + ":" + trackID
+}
+
+// splitTrackKey extracts the bare trackID from a composite key.
+func splitTrackKey(key string) (senderID string, trackID string) {
+	for i := len(key) - 1; i >= 0; i-- {
+		if key[i] == ':' {
+			return key[:i], key[i+1:]
+		}
+	}
+	return "", key
 }
 
 func NewSFU(config *SFUConfig, ps pubsub.PubSub, logger *slog.Logger) *SFU {
@@ -111,31 +129,28 @@ func (s *SFU) DeleteRoom(roomID uuid.UUID) {
 }
 
 // requestKeyframe relays a PLI to the original sender of a track
-func (s *SFU) requestKeyframe(trackID string, roomID uuid.UUID) {
+func (s *SFU) requestKeyframe(senderID uuid.UUID, trackID string, roomID uuid.UUID) {
 	room := s.GetRoom(roomID)
 	if room == nil {
 		return
 	}
 
 	room.mu.RLock()
-	defer room.mu.RUnlock()
+	sender := room.participants[senderID]
+	room.mu.RUnlock()
 
-	// Find the participant who owns this track (the sender)
-	for _, p := range room.participants {
-		p.mu.RLock()
-		if track, ok := p.remoteTracks[trackID]; ok {
-			// Found the sender! Send PLI to them.
-			// Only log if Debug level is enabled to avoid spam
-			// p.logger.Debug("Relaying PLI for track", "track_id", trackID)
-			
-			_ = p.pc.WriteRTCP([]rtcp.Packet{
-				&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
-			})
-			p.mu.RUnlock()
-			return
-		}
-		p.mu.RUnlock()
+	if sender == nil {
+		return
 	}
+
+	sender.mu.RLock()
+	track, ok := sender.remoteTracks[trackID]
+	if ok {
+		_ = sender.pc.WriteRTCP([]rtcp.Packet{
+			&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+		})
+	}
+	sender.mu.RUnlock()
 }
 
 func (r *SFURoom) SetCallID(callID uuid.UUID) {
@@ -160,7 +175,7 @@ func (r *SFURoom) GetTracks() []TrackInfo {
 		p.mu.RLock()
 		for _, track := range p.remoteTracks {
 			tracks = append(tracks, TrackInfo{
-				ID:       track.ID(),       // The REAL WebRTC Track ID
+				ID:       track.ID(), // The REAL WebRTC Track ID
 				Kind:     track.Kind().String(),
 				UserID:   p.UserID.String(),
 				Username: p.Username,
@@ -196,7 +211,7 @@ func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username s
 	}
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(webrtc.SettingEngine{}))
-	
+
 	config := webrtc.Configuration{ICEServers: s.config.ICEServers}
 	pc, err := api.NewPeerConnection(config)
 	if err != nil {
@@ -209,16 +224,18 @@ func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username s
 		if _, err := pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{
 			Direction: webrtc.RTPTransceiverDirectionRecvonly,
 		}); err != nil {
-			pc.Close()
+			if closeErr := pc.Close(); closeErr != nil {
+				s.logger.Error("failed to close peer connection on setup error", "error", closeErr)
+			}
 			pCancel()
 			return nil, err
 		}
 	}
 
 	participant := &SFUParticipant{
-		UserID:       userID,
-		Username:     username,
-		pc:           pc,
+		UserID:        userID,
+		Username:      username,
+		pc:            pc,
 		localTracks:   make(map[string]*webrtc.TrackLocalStaticRTP),
 		remoteTracks:  make(map[string]*webrtc.TrackRemote),
 		subscribers:   make(map[string][]*webrtc.TrackLocalStaticRTP),
@@ -262,7 +279,8 @@ func (s *SFU) JoinRoom(ctx context.Context, roomID, userID uuid.UUID, username s
 		other.mu.RLock()
 		for _, remoteTrack := range other.remoteTracks {
 			// Don't negotiate yet; the initial offer covers this
-			participant.subscribeToTrack(ctx, other.UserID, remoteTrack, false)
+			// Use participant's long-lived context, not the request-scoped context
+			participant.subscribeToTrack(pCtx, other.UserID, remoteTrack, false)
 		}
 		other.mu.RUnlock()
 	}
@@ -329,7 +347,10 @@ func (p *SFUParticipant) subscribeToTrack(ctx context.Context, senderID uuid.UUI
 		return
 	}
 
-	// Read RTCP from receiver (needed for PLI)
+	// Capture senderID for the goroutine closure
+	upstreamSenderID := senderID
+	upstreamTrackID := remoteTrack.ID()
+
 	// Read RTCP from receiver (needed for PLI)
 	go func() {
 		rtcpBuf := make([]byte, 1500)
@@ -339,7 +360,6 @@ func (p *SFUParticipant) subscribeToTrack(ctx context.Context, senderID uuid.UUI
 				return
 			}
 
-			// FIX 5: Handle RTCP Feedback (PLI/NACK)
 			pkts, err := rtcp.Unmarshal(rtcpBuf[:n])
 			if err != nil {
 				continue
@@ -348,19 +368,22 @@ func (p *SFUParticipant) subscribeToTrack(ctx context.Context, senderID uuid.UUI
 			for _, pkt := range pkts {
 				switch pkt.(type) {
 				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-					// User needs a keyframe! Relay this request to the original sender.
-					p.sfu.requestKeyframe(remoteTrack.ID(), p.room.ID)
+					// Relay keyframe request to the specific sender
+					p.sfu.requestKeyframe(upstreamSenderID, upstreamTrackID, p.room.ID)
 				}
 			}
 		}
 	}()
 
+	// Use composite key to avoid collisions when multiple senders have same track ID
+	compositeKey := trackKey(senderID, remoteTrack.ID())
+
 	p.mu.Lock()
-	p.localTracks[remoteTrack.ID()] = localTrack
-	p.subscriptions[remoteTrack.ID()] = senderID
+	p.localTracks[compositeKey] = localTrack
+	p.subscriptions[compositeKey] = senderID
 	p.mu.Unlock()
 
-	// Register with sender
+	// Register with sender (sender uses bare trackID since its map is per-participant)
 	p.room.mu.RLock()
 	sfuSender := p.room.participants[senderID]
 	p.room.mu.RUnlock()
@@ -369,8 +392,8 @@ func (p *SFUParticipant) subscribeToTrack(ctx context.Context, senderID uuid.UUI
 		sfuSender.AddSubscriber(remoteTrack.ID(), localTrack)
 	}
 
-	// FIX 3: Request Keyframe (PLI) immediately so new subscriber gets image
-	p.sendPLI(remoteTrack)
+	// Request Keyframe (PLI) immediately so new subscriber gets image
+	p.sendPLI(senderID, remoteTrack)
 
 	if negotiate {
 		p.processNegotiation(ctx)
@@ -393,7 +416,7 @@ func (p *SFUParticipant) processNegotiation(ctx context.Context) {
 	go func() {
 		// Small delay to debounce multiple track additions
 		time.Sleep(50 * time.Millisecond)
-		
+
 		offer, err := p.CreateOffer(ctx)
 		if err != nil {
 			p.logger.Error("failed to create offer", "error", err)
@@ -403,28 +426,46 @@ func (p *SFUParticipant) processNegotiation(ctx context.Context) {
 			return
 		}
 		p.sendOffer(ctx, offer)
+
+		// Start a timeout timer — if client doesn't answer within 15s, reset negotiation state
+		p.mu.Lock()
+		p.negotiationTimer = time.AfterFunc(15*time.Second, func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+
+			if !p.isNegotiating {
+				return // Answer arrived in time
+			}
+
+			p.logger.Warn("negotiation timeout — no answer received within 15s, resetting")
+			p.isNegotiating = false
+			p.negotiationTimer = nil
+
+			if p.negotiationPending {
+				p.negotiationPending = false
+				// Unlock before calling processNegotiation to avoid recursive lock
+				go p.processNegotiation(ctx)
+			}
+		})
+		p.mu.Unlock()
 	}()
 }
 
-func (p *SFUParticipant) sendPLI(track *webrtc.TrackRemote) {
-	// Find the participant who owns this remote track
+func (p *SFUParticipant) sendPLI(senderID uuid.UUID, track *webrtc.TrackRemote) {
+	// Look up the specific sender directly instead of iterating all participants
 	p.room.mu.RLock()
-	defer p.room.mu.RUnlock()
+	sender := p.room.participants[senderID]
+	p.room.mu.RUnlock()
 
-	for _, participant := range p.room.participants {
-		participant.mu.RLock()
-		if _, ok := participant.remoteTracks[track.ID()]; ok {
-			// Found the sender, send PLI to their PC
-			err := participant.pc.WriteRTCP([]rtcp.Packet{
-				&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
-			})
-			if err != nil {
-				p.logger.Error("failed to send PLI", "error", err)
-			}
-			participant.mu.RUnlock()
-			return
-		}
-		participant.mu.RUnlock()
+	if sender == nil {
+		return
+	}
+
+	err := sender.pc.WriteRTCP([]rtcp.Packet{
+		&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+	})
+	if err != nil {
+		p.logger.Error("failed to send PLI", "error", err)
 	}
 }
 
@@ -476,7 +517,23 @@ func (p *SFUParticipant) HandleAnswer(ctx context.Context, sdp string) error {
 	p.mu.Lock()
 	p.isNegotiating = false
 	pending := p.negotiationPending
+
+	// Cancel the negotiation timeout timer since we got an answer
+	if p.negotiationTimer != nil {
+		p.negotiationTimer.Stop()
+		p.negotiationTimer = nil
+	}
+
+	// Flush buffered remote candidates
+	candidates := p.remotePendingCandidates
+	p.remotePendingCandidates = nil
 	p.mu.Unlock()
+
+	for _, c := range candidates {
+		if err := p.pc.AddICECandidate(c); err != nil {
+			p.logger.Error("failed to add buffered candidate", "error", err)
+		}
+	}
 
 	if pending {
 		p.processNegotiation(ctx)
@@ -499,11 +556,10 @@ func (p *SFUParticipant) sendICECandidate(ctx context.Context, candidate *webrtc
 }
 
 func (p *SFUParticipant) emitCandidate(ctx context.Context, candidate *webrtc.ICECandidate) {
-	candidateJSON, _ := json.Marshal(candidate.ToJSON())
 	payload := map[string]interface{}{
 		"room_id":   p.room.ID.String(),
 		"from_id":   "server",
-		"candidate": string(candidateJSON),
+		"candidate": candidate.ToJSON(),
 	}
 	bytes, _ := json.Marshal(payload)
 	msg := &pubsub.Message{
@@ -535,11 +591,27 @@ func (p *SFUParticipant) sendOffer(ctx context.Context, sdp string) {
 	}
 }
 
-func (p *SFUParticipant) HandleICECandidate(ctx context.Context, cand string) error {
+func (p *SFUParticipant) HandleICECandidate(ctx context.Context, cand interface{}) error {
+	// Marshal the interface{} to bytes, then unmarshal as ICECandidateInit
+	// This handles both JSON objects and strings uniformly
+	candBytes, err := json.Marshal(cand)
+	if err != nil {
+		return fmt.Errorf("failed to marshal candidate: %w", err)
+	}
+
 	var i webrtc.ICECandidateInit
-	if err := json.Unmarshal([]byte(cand), &i); err != nil {
+	if err := json.Unmarshal(candBytes, &i); err != nil {
 		return fmt.Errorf("failed to unmarshal candidate: %w", err)
 	}
+
+	p.mu.Lock()
+	if p.pc.CurrentRemoteDescription() == nil {
+		p.remotePendingCandidates = append(p.remotePendingCandidates, i)
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+
 	return p.pc.AddICECandidate(i)
 }
 
@@ -562,10 +634,12 @@ func (p *SFUParticipant) Close() error {
 
 	// Clean up subscriptions from upstream senders
 	p.room.mu.RLock()
-	for trackID, senderID := range p.subscriptions {
+	for compositeKey, senderID := range p.subscriptions {
 		if sender := p.room.participants[senderID]; sender != nil {
-			if localTrack, ok := p.localTracks[trackID]; ok {
-				sender.RemoveSubscriber(trackID, localTrack)
+			if localTrack, ok := p.localTracks[compositeKey]; ok {
+				// RemoveSubscriber uses bare trackID since sender's map is per-participant
+				_, bareTrackID := splitTrackKey(compositeKey)
+				sender.RemoveSubscriber(bareTrackID, localTrack)
 			}
 		}
 	}
@@ -611,14 +685,17 @@ func (r *SFURoom) RemoveParticipant(u uuid.UUID) {
 	r.mu.Unlock()
 
 	if ok && p != nil {
-		p.Close()
-		
+		if err := p.Close(); err != nil {
+			r.logger.Error("failed to close participant", "user_id", u, "error", err)
+		}
+
 		// Trigger room deletion check if empty
 		r.mu.RLock()
 		count := len(r.participants)
 		r.mu.RUnlock()
-		
+
 		if count == 0 {
+			r.logger.Debug("room is empty", "room_id", r.ID)
 			// Room is empty.
 			// Ideally we would delete the room here, but the Manager handles cleanup
 			// via OnConnectionStateChange or explicit checks.

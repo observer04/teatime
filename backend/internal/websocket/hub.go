@@ -169,7 +169,7 @@ func (h *Hub) handleUnregister(client *Client) {
 			UserID:   userID,
 			Username: username,
 		}
-		
+
 		for _, roomID := range roomsForCallCleanup {
 			leavePayload := json.RawMessage(`{"room_id":"` + roomID.String() + `"}`)
 
@@ -226,6 +226,8 @@ func (h *Hub) HandleMessage(client *Client, msg *Message) {
 		h.handleCallDeclined(client, msg.Payload)
 	case webrtc.EventTypeCallReady:
 		h.handleCallReady(client, msg.Payload)
+	case webrtc.EventTypeCallMuteUpdate:
+		h.handleCallMuteUpdate(client, msg.Payload)
 	// SFU group call events
 	case webrtc.EventTypeSFUJoin:
 		h.handleSFUJoin(client, msg.Payload)
@@ -687,6 +689,37 @@ func (h *Hub) handleCallReady(client *Client, payload json.RawMessage) {
 	_ = h.callHandler.HandleReady(context.Background(), sigCtx, payload)
 }
 
+func (h *Hub) handleCallMuteUpdate(client *Client, payload json.RawMessage) {
+	if !client.IsAuthenticated() {
+		return
+	}
+
+	sigCtx := &webrtc.SignalingContext{
+		UserID:   client.UserID(),
+		Username: client.Username(),
+	}
+
+	// Parse room_id to determine which handler to use
+	var p struct {
+		RoomID string `json:"room_id"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return
+	}
+
+	roomID, err := uuid.Parse(p.RoomID)
+	if err != nil {
+		return
+	}
+
+	// Try SFU room first, then P2P
+	if h.sfuHandler != nil && h.sfuHandler.IsUserInSFURoom(roomID, client.UserID()) {
+		_ = h.sfuHandler.HandleSFUMuteUpdate(context.Background(), sigCtx, payload)
+	} else if h.callHandler != nil {
+		_ = h.callHandler.HandleMuteUpdate(context.Background(), sigCtx, payload)
+	}
+}
+
 func (h *Hub) handleSFUJoin(client *Client, payload json.RawMessage) {
 	if !client.IsAuthenticated() {
 		client.sendError("not_authenticated", "Must authenticate first")
@@ -716,7 +749,7 @@ func (h *Hub) handleSFUJoin(client *Client, payload json.RawMessage) {
 	// Send config back
 	responseBytes, _ := json.Marshal(config)
 	msg := &Message{
-		Type:    webrtc.EventTypeCallConfig, 
+		Type:    webrtc.EventTypeCallConfig,
 		Payload: responseBytes,
 	}
 	_ = client.Send(msg)

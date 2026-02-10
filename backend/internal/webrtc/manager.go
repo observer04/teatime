@@ -72,9 +72,6 @@ func (c *Config) GetPionICEServers() []pionwebrtc.ICEServer {
 type Participant struct {
 	UserID   uuid.UUID `json:"user_id"`
 	Username string    `json:"username"`
-	HasVideo bool      `json:"has_video"`
-	HasAudio bool      `json:"has_audio"`
-	// PeerConnection will be added when Pion is integrated
 }
 
 // Room represents an active video call
@@ -303,7 +300,7 @@ func (m *Manager) HandleDisconnect(ctx context.Context, userID uuid.UUID) {
 		// We can try to get it from the room before leaving if needed, or pass empty.
 		// The current LeaveCall implementation passes username to event.
 		// Optimally we get it from the participant struct in the room.
-		
+
 		var username string
 		room := m.GetRoom(roomID)
 		if room != nil {

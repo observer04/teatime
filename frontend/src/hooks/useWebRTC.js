@@ -55,6 +55,10 @@ export function useWebRTC(userId) {
   React.useEffect(() => { iceServersRef.current = iceServers; }, [iceServers]);
   React.useEffect(() => { callModeRef.current = callMode; }, [callMode]);
   
+  // Ref for isVideoOff state (needed in migration handler's setTimeout callback)
+  const isVideoOffRef = React.useRef(false);
+  React.useEffect(() => { isVideoOffRef.current = isVideoOff; }, [isVideoOff]);
+  
   // Track max participants we've seen
   React.useEffect(() => {
     const otherCount = participants.filter(p => p.user_id !== userId).length;
@@ -121,7 +125,7 @@ export function useWebRTC(userId) {
         if (roomId) {
           wsService.send('sfu.candidate', {
             room_id: roomId,
-            candidate: JSON.stringify(event.candidate)
+            candidate: event.candidate.toJSON()
           });
         }
       }
@@ -556,7 +560,7 @@ export function useWebRTC(userId) {
     cleanupMedia();
 
     // Close connections based on mode
-    if (callMode === 'sfu') {
+    if (callModeRef.current === 'sfu') {
       closeSFUConnection();
     } else {
       // Close all P2P peer connections
@@ -581,7 +585,7 @@ export function useWebRTC(userId) {
     setParticipants([]);
     setRemoteStreams({});
     setCallState('idle');
-  }, [callMode, closePeerConnection, closeSFUConnection, cleanupMedia, clearCleanupTimers]);
+  }, [closePeerConnection, closeSFUConnection, cleanupMedia, clearCleanupTimers]);
 
   // Toggle mute
   const toggleMute = React.useCallback(() => {
@@ -722,9 +726,42 @@ export function useWebRTC(userId) {
       
       if (mode === 'sfu') {
         // SFU mode: wait for sfu.offer from server
-        console.log('SFU mode: waiting for offer from server');
+        console.log('SFU mode: initializing connection');
+        
         // Create SFU connection with local stream
-        await createSFUConnection(localStreamRef.current);
+        // Pass payload.sdp if available (optimization to avoid race condition)
+        const pc = await createSFUConnection(localStreamRef.current);
+        
+        if (payload.sdp) {
+            console.log('Received initial SFU offer in config, processing immediately...');
+            try {
+                const sdp = payload.sdp;
+                console.log('Setting SFU remote description (initial offer)...');
+                await pc.setRemoteDescription(new RTCSessionDescription({
+                  type: 'offer',
+                  sdp: sdp
+                }));
+                
+                // Process any pending ICE candidates that might have arrived
+                for (const candidate of sfuPendingCandidates.current) {
+                  await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+                sfuPendingCandidates.current = [];
+                
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                
+                wsService.send('sfu.answer', {
+                  room_id: payload.room_id,
+                  sdp: answer.sdp
+                });
+                console.log('Sent initial SFU answer');
+            } catch (err) {
+                console.error('Failed to handle initial SFU offer:', err);
+            }
+        } else {
+            console.log('No initial SFU offer in config, waiting for sfu.offer event...');
+        }
       } else {
         // P2P mode:
         // Initialize connections for all existing peers
@@ -823,9 +860,28 @@ export function useWebRTC(userId) {
         // In SFU mode, finding the stream by user_id and removing it
         setRemoteStreams(prev => {
           const next = { ...prev };
-          const streamIdToRemove = Object.keys(next).find(
+          // Try to find by userId (set by sfu.tracks handler)
+          let streamIdToRemove = Object.keys(next).find(
             key => next[key].userId === payload.user_id
           );
+          
+          // Fallback: if sfu.tracks hasn't mapped this stream yet,
+          // check if there's an unmatched stream that's no longer active
+          if (!streamIdToRemove) {
+            // Remove any orphaned streams - streams whose userId doesn't match
+            // any remaining participant
+            const remainingUserIds = new Set(
+              participants
+                .filter(p => p.user_id !== payload.user_id)
+                .map(p => p.user_id)
+            );
+            for (const key of Object.keys(next)) {
+              if (next[key].userId && !remainingUserIds.has(next[key].userId)) {
+                streamIdToRemove = key;
+                break;
+              }
+            }
+          }
           
           if (streamIdToRemove) {
             console.log('Removing SFU stream for user:', payload.user_id);
@@ -869,7 +925,7 @@ export function useWebRTC(userId) {
 
     const unsubLeft = wsService.on('call.participant_left', handleParticipantLeft);
     return () => unsubLeft();
-  }, [closePeerConnection, userId, leaveCall, callMode]);
+  }, [closePeerConnection, userId, leaveCall, callMode, participants]);
 
   // Track if we've ever had a successful connection (used to prevent premature call ending)
   const hasEverConnected = React.useRef(false);
@@ -1177,7 +1233,10 @@ export function useWebRTC(userId) {
   React.useEffect(() => {
     const handleSFUCandidate = async (payload) => {
       const pc = sfuConnection.current;
-      const candidate = JSON.parse(payload.candidate);
+      // Candidate is now sent as a JSON object (aligned with P2P format)
+      const candidate = typeof payload.candidate === 'string' 
+        ? JSON.parse(payload.candidate) 
+        : payload.candidate;
       
       if (pc && pc.remoteDescription) {
         try {
@@ -1322,9 +1381,11 @@ export function useWebRTC(userId) {
          
          // 2. Re-join after a short delay to allow cleanup to finish
          // The new join will be routed to SFU by the backend because of the split-brain fix
+         // Capture isVideoOff via ref to avoid stale closure in setTimeout
+         const videoEnabled = !isVideoOffRef.current;
          setTimeout(() => {
            console.log('Re-joining call in SFU mode...');
-           joinCall(payload.room_id, !isVideoOff);
+           joinCall(payload.room_id, videoEnabled);
          }, 800);
       }
     };
@@ -1342,7 +1403,7 @@ export function useWebRTC(userId) {
       unsubDeclined();
       unsubMigration();
     };
-  }, [isInCall, incomingCall, leaveCall, userId, joinCall, isVideoOff]);
+  }, [isInCall, incomingCall, leaveCall, userId, joinCall]);
 
   // Accept incoming call
   const acceptCall = React.useCallback(async (withVideo = true) => {

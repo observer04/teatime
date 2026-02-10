@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/observer/teatime/internal/database"
+	"github.com/observer/teatime/internal/domain"
 	"github.com/observer/teatime/internal/pubsub"
 )
 
@@ -58,8 +59,8 @@ type SFUOfferPayload struct {
 
 // SFUCandidatePayload contains ICE candidate for SFU
 type SFUCandidatePayload struct {
-	RoomID    string `json:"room_id"`
-	Candidate string `json:"candidate"`
+	RoomID    string      `json:"room_id"`
+	Candidate interface{} `json:"candidate"`
 }
 
 // SFUConfigPayload is sent to client after joining a group call
@@ -68,6 +69,7 @@ type SFUConfigPayload struct {
 	ICEServers   []ICEServer   `json:"ice_servers"`
 	Participants []Participant `json:"participants"`
 	Mode         string        `json:"mode"` // "sfu" or "p2p"
+	SDP          string        `json:"sdp,omitempty"`
 }
 
 // SFUTracksPayload contains track information
@@ -102,7 +104,7 @@ func (h *SFUHandler) HandleGroupJoin(ctx context.Context, sigCtx *SignalingConte
 	}
 
 	// For group conversations (3+ members) or explicit group flag, use SFU
-	isGroup := p.IsGroup || conv.Type == "group" || len(conv.Members) > 2
+	isGroup := p.IsGroup || conv.Type == domain.ConversationTypeGroup || len(conv.Members) > 2
 
 	if isGroup {
 		// FIX 1: Split-Brain Detection & Migration
@@ -110,12 +112,12 @@ func (h *SFUHandler) HandleGroupJoin(ctx context.Context, sigCtx *SignalingConte
 		p2pRoom := h.p2pMgr.GetRoom(roomID)
 		if p2pRoom != nil && p2pRoom.ParticipantCount() > 0 {
 			h.logger.Info("detected P2P room during group join - triggering migration", "room_id", roomID)
-			
+
 			// Notify P2P participants to reload/reconnect, which will now route them to SFU
 			// because the conversation type is now 'group' (or implicit group)
 			migrationEvent := map[string]interface{}{
 				"room_id": roomID.String(),
-				"reason": "switching_to_group",
+				"reason":  "switching_to_group",
 			}
 			payloadBytes, _ := json.Marshal(migrationEvent)
 
@@ -124,15 +126,27 @@ func (h *SFUHandler) HandleGroupJoin(ctx context.Context, sigCtx *SignalingConte
 			for _, participant := range p2pRoom.GetParticipants() {
 				msg := &pubsub.Message{
 					Topic:   pubsub.Topics.User(participant.UserID.String()),
-					Type:    "call.migration", // Frontend needs to listen for this!
+					Type:    EventTypeCallMigration,
 					Payload: payloadBytes,
 				}
 				if err := h.pubsub.Publish(ctx, msg.Topic, msg); err != nil {
 					h.logger.Error("failed to publish migration event", "error", err, "user_id", participant.UserID)
 				}
 			}
-			
-			// Optional: Close P2P room logic here
+
+			// Clean up the P2P room to prevent split-brain state
+			p2pCallID := p2pRoom.GetCallID()
+			p2pParticipants := p2pRoom.GetParticipants()
+			for _, participant := range p2pParticipants {
+				h.p2pMgr.LeaveCall(ctx, roomID, participant.UserID, participant.Username)
+			}
+
+			// End the P2P call log in the database
+			if p2pCallID != uuid.Nil && h.callRepo != nil {
+				h.logger.Info("ending P2P call during migration to SFU",
+					"room_id", roomID, "p2p_call_id", p2pCallID)
+				_ = h.callRepo.EndCall(ctx, p2pCallID)
+			}
 		}
 
 		return h.joinSFU(ctx, sigCtx, roomID, p.CallType)
@@ -165,6 +179,14 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 		isInitiator := existingCallID == uuid.Nil
 
 		if isInitiator {
+			// Zombie call cleanup: end any dangling active calls for this room
+			activeCallID, err := h.callRepo.GetActiveCallID(ctx, roomID)
+			if err == nil && activeCallID != uuid.Nil {
+				h.logger.Warn("found dangling active SFU call, cleaning up",
+					"room_id", roomID, "call_id", activeCallID)
+				_ = h.callRepo.EndCall(ctx, activeCallID)
+			}
+
 			ct := database.CallTypeVideo
 			if callType == "audio" {
 				ct = database.CallTypeAudio
@@ -188,12 +210,37 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 	h.broadcastParticipantJoined(ctx, room, sigCtx)
 
 	// Create initial offer to send to the participant
+	var offerSDP string
 	offer, err := participant.CreateOffer(ctx)
 	if err != nil {
 		h.logger.Error("failed to create initial offer", "error", err)
 	} else {
-		// Send offer to participant
-		h.sendOfferToParticipant(ctx, sigCtx.UserID, roomID, offer)
+		offerSDP = offer
+		// optimization: we include SDP in the response, so we don't need to send it via pubsub
+		// h.sendOfferToParticipant(ctx, sigCtx.UserID, roomID, offer)
+
+		// Flush pending CANDIDATES that might have been buffered during CreateOffer
+		// The `CreateOffer` method in `sfu.go` sets LocalDescription, so `sendICECandidate`
+		// might have buffered some if they fired before SetLocalDescription returned (unlikely given lock?
+		// actually `CreateOffer` uses `pc.SetLocalDescription` internally).
+		// Wait, `sfu.go` `sendOffer` method did the flushing. Since we are NOT calling `sendOffer` (which calls `sendOfferToParticipant`),
+		// we need to make sure we replicate the sidebar effects of `sendOffer` if any.
+		// `SFUParticipant.sendOffer` does: 1. Publish JSON 2. Flush pendingCandidates.
+		// We skipped 1. We MUST do 2.
+
+		// Accessing private field `pendingCandidates` of `SFUParticipant` is not possible directly from here if it wasn't exported.
+		// But we are in `package webrtc`, so we can access it.
+		// Let's create a helper or just do it if we can access the field (it's in the same package).
+		// `participant` is `*SFUParticipant`.
+
+		participant.mu.Lock()
+		candidates := participant.pendingCandidates
+		participant.pendingCandidates = nil
+		participant.mu.Unlock()
+
+		for _, c := range candidates {
+			participant.emitCandidate(ctx, c)
+		}
 	}
 
 	// Send track info so frontend can identify remote streams
@@ -206,6 +253,7 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 		ICEServers:   iceServers,
 		Participants: room.GetParticipantList(),
 		Mode:         "sfu",
+		SDP:          offerSDP,
 	}, nil
 }
 
@@ -367,14 +415,25 @@ func (h *SFUHandler) HandleSFULeave(ctx context.Context, sigCtx *SignalingContex
 
 	room := h.sfu.GetRoom(roomID)
 	if room != nil {
+		// Capture call ID before removing participant
+		callID := room.GetCallID()
+
 		room.RemoveParticipant(sigCtx.UserID)
 
 		// Notify others
 		h.broadcastParticipantLeft(ctx, room, sigCtx)
 
-		// Clean up empty room
+		// Clean up empty room and end call in DB
 		if room.ParticipantCount() == 0 {
 			h.sfu.DeleteRoom(roomID)
+
+			// End the call in the database (mirrors P2P HandleLeave behavior)
+			if callID != uuid.Nil && h.callRepo != nil {
+				h.logger.Info("ending SFU call in database", "call_id", callID, "room_id", roomID)
+				if err := h.callRepo.EndCall(ctx, callID); err != nil {
+					h.logger.Error("failed to end SFU call", "error", err, "call_id", callID)
+				}
+			}
 		}
 	}
 
@@ -382,22 +441,7 @@ func (h *SFUHandler) HandleSFULeave(ctx context.Context, sigCtx *SignalingContex
 	return nil
 }
 
-// Helper methods for sending messages
 
-func (h *SFUHandler) sendOfferToParticipant(ctx context.Context, userID, roomID uuid.UUID, sdp string) {
-	payload := map[string]interface{}{
-		"room_id": roomID.String(),
-		"sdp":     sdp,
-	}
-	payloadBytes, _ := json.Marshal(payload)
-
-	msg := &pubsub.Message{
-		Topic:   pubsub.Topics.User(userID.String()),
-		Type:    EventTypeSFUOffer,
-		Payload: payloadBytes,
-	}
-	_ = h.pubsub.Publish(ctx, msg.Topic, msg)
-}
 
 func (h *SFUHandler) sendAnswerToParticipant(ctx context.Context, userID, roomID uuid.UUID, sdp string) {
 	payload := map[string]interface{}{
@@ -486,4 +530,61 @@ func (h *SFUHandler) broadcastParticipantLeft(ctx context.Context, room *SFURoom
 		}
 		_ = h.pubsub.Publish(ctx, msg.Topic, msg)
 	}
+}
+
+// HandleSFUMuteUpdate processes a call.mute_update message for SFU group calls
+func (h *SFUHandler) HandleSFUMuteUpdate(ctx context.Context, sigCtx *SignalingContext, payload json.RawMessage) error {
+	var p struct {
+		RoomID string `json:"room_id"`
+		Kind   string `json:"kind"`
+		Muted  bool   `json:"muted"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return &CallError{Code: "invalid_payload", Message: "Invalid mute update payload"}
+	}
+
+	roomID, err := uuid.Parse(p.RoomID)
+	if err != nil {
+		return &CallError{Code: "invalid_room", Message: "Invalid room ID"}
+	}
+
+	room := h.sfu.GetRoom(roomID)
+	if room == nil {
+		return &CallError{Code: "room_not_found", Message: "Room not found"}
+	}
+
+	// Relay mute update to other participants in the SFU room
+	relayPayload := map[string]interface{}{
+		"room_id": roomID.String(),
+		"user_id": sigCtx.UserID.String(),
+		"kind":    p.Kind,
+		"muted":   p.Muted,
+	}
+	payloadBytes, _ := json.Marshal(relayPayload)
+
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+
+	for _, participant := range room.participants {
+		if participant.UserID == sigCtx.UserID {
+			continue
+		}
+		msg := &pubsub.Message{
+			Topic:   pubsub.Topics.User(participant.UserID.String()),
+			Type:    EventTypeCallMuteUpdate,
+			Payload: payloadBytes,
+		}
+		_ = h.pubsub.Publish(ctx, msg.Topic, msg)
+	}
+
+	return nil
+}
+
+// IsUserInSFURoom checks if a user is in an SFU room
+func (h *SFUHandler) IsUserInSFURoom(roomID, userID uuid.UUID) bool {
+	room := h.sfu.GetRoom(roomID)
+	if room == nil {
+		return false
+	}
+	return room.GetParticipant(userID) != nil
 }

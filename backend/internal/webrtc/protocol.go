@@ -14,21 +14,25 @@ const (
 	EventTypeCallConfig            = "call.config"
 	EventTypeCallError             = "call.error"
 	// Incoming call events
-	EventTypeCallIncoming  = "call.incoming"  // Sent to other members when someone starts a call
-	EventTypeCallAccepted  = "call.accepted"  // Sent when someone accepts the call
-	EventTypeCallDeclined  = "call.declined"  // Sent when someone declines the call
-	EventTypeCallCancelled = "call.cancelled" // Sent when caller cancels before answer
-	EventTypeCallEnded     = "call.ended"     // Sent when call ends
-	EventTypeCallReady     = "call.ready"     // Sent when participant is ready for offer
+	EventTypeCallIncoming   = "call.incoming"    // Sent to other members when someone starts a call
+	EventTypeCallAccepted   = "call.accepted"    // Sent when someone accepts the call
+	EventTypeCallDeclined   = "call.declined"    // Sent when someone declines the call
+	EventTypeCallCancelled  = "call.cancelled"   // Sent when caller cancels before answer
+	EventTypeCallEnded      = "call.ended"       // Sent when call ends
+	EventTypeCallReady      = "call.ready"       // Sent when participant is ready for offer
 	EventTypeCallMuteUpdate = "call.mute_update" // Sent when participant toggles mute/video
-	
+	EventTypeCallMigration  = "call.migration"   // Sent when P2P call migrates to SFU
+
 	// SFU Events
-	EventTypeSFUJoin      = "sfu.join"
-	EventTypeSFULeave     = "sfu.leave"
-	EventTypeSFUOffer     = "sfu.offer"
-	EventTypeSFUAnswer    = "sfu.answer"
-	EventTypeSFUCandidate = "sfu.candidate"
-	EventTypeSFUTracks    = "sfu.tracks"
+	// Note: EventTypeSFUJoin exists for completeness but the frontend always sends
+	// EventTypeCallJoin which is auto-routed to SFU by the hub when sfuHandler is available.
+	EventTypeSFUJoin       = "sfu.join"
+	EventTypeSFULeave      = "sfu.leave"
+	EventTypeSFUOffer      = "sfu.offer"
+	EventTypeSFUAnswer     = "sfu.answer"
+	EventTypeSFUCandidate  = "sfu.candidate"
+	EventTypeSFUTracks     = "sfu.tracks"
+	EventTypeSFUMuteUpdate = "sfu.mute_update"
 )
 
 // CallJoinPayload is sent by client to join a call

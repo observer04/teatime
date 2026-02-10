@@ -125,7 +125,7 @@ func (h *CallHandler) HandleJoin(ctx context.Context, sigCtx *SignalingContext, 
 		// Prepare to close any stale calls
 		activeCallID, err := h.callRepo.GetActiveCallID(ctx, roomID)
 		if err == nil && activeCallID != uuid.Nil {
-			h.logger.Warn("found dangling active call for new room, cleaning up", 
+			h.logger.Warn("found dangling active call for new room, cleaning up",
 				"room_id", roomID, "call_id", activeCallID)
 			_ = h.callRepo.EndCall(ctx, activeCallID)
 		}
@@ -478,6 +478,61 @@ type CallError struct {
 
 func (e *CallError) Error() string {
 	return e.Message
+}
+
+// HandleMuteUpdate processes a call.mute_update message for P2P calls
+func (h *CallHandler) HandleMuteUpdate(ctx context.Context, sigCtx *SignalingContext, payload json.RawMessage) error {
+	var p struct {
+		RoomID string `json:"room_id"`
+		Kind   string `json:"kind"`
+		Muted  bool   `json:"muted"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return &CallError{Code: "invalid_payload", Message: "Invalid mute update payload"}
+	}
+
+	roomID, err := uuid.Parse(p.RoomID)
+	if err != nil {
+		return &CallError{Code: "invalid_room", Message: "Invalid room ID"}
+	}
+
+	room := h.manager.GetRoom(roomID)
+	if room == nil {
+		return &CallError{Code: "no_call", Message: "No active call in this room"}
+	}
+
+	// Relay mute update to other participants in the P2P room
+	relayPayload := map[string]interface{}{
+		"room_id": roomID.String(),
+		"user_id": sigCtx.UserID.String(),
+		"kind":    p.Kind,
+		"muted":   p.Muted,
+	}
+	payloadBytes, _ := json.Marshal(relayPayload)
+
+	// Send to each participant except the sender
+	for _, participant := range room.GetParticipants() {
+		if participant.UserID == sigCtx.UserID {
+			continue
+		}
+		msg := &pubsub.Message{
+			Topic:   pubsub.Topics.User(participant.UserID.String()),
+			Type:    EventTypeCallMuteUpdate,
+			Payload: payloadBytes,
+		}
+		_ = h.pubsub.Publish(ctx, msg.Topic, msg)
+	}
+
+	return nil
+}
+
+// IsUserInRoom checks if a user is in a P2P room
+func (h *CallHandler) IsUserInRoom(roomID, userID uuid.UUID) bool {
+	room := h.manager.GetRoom(roomID)
+	if room == nil {
+		return false
+	}
+	return room.HasParticipant(userID)
 }
 
 // HandleDisconnect cleans up user from all rooms
