@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { X, Search, UserPlus, Crown, Shield, Trash2, Loader2 } from "lucide-react"
 import api from "../services/api"
 
@@ -27,7 +27,7 @@ export function MembersPanel({
     if (isOpen && conversation?.id) {
       loadMembers()
     }
-  }, [isOpen, conversation?.id])
+  }, [isOpen, conversation?.id, loadMembers])
 
   useEffect(() => {
     if (searchQuery.length >= 2) {
@@ -36,9 +36,9 @@ export function MembersPanel({
     } else {
       setSearchResults([])
     }
-  }, [searchQuery])
+  }, [searchQuery, searchUsers])
 
-  const loadMembers = async () => {
+  const loadMembers = useCallback(async () => {
     setLoading(true)
     setError("")
     try {
@@ -56,9 +56,9 @@ export function MembersPanel({
     } finally {
       setLoading(false)
     }
-  }
+  }, [conversation.id, conversation.members])
 
-  const searchUsers = async () => {
+  const searchUsers = useCallback(async () => {
     setSearching(true)
     try {
       const data = await api.searchUsers(searchQuery)
@@ -70,7 +70,7 @@ export function MembersPanel({
     } finally {
       setSearching(false)
     }
-  }
+  }, [searchQuery, members])
 
   const handleAddMember = async (user) => {
     setActionLoading(user.id)

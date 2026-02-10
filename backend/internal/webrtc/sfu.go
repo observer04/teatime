@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -536,7 +537,9 @@ func (p *SFUParticipant) sendOffer(ctx context.Context, sdp string) {
 
 func (p *SFUParticipant) HandleICECandidate(ctx context.Context, cand string) error {
 	var i webrtc.ICECandidateInit
-	json.Unmarshal([]byte(cand), &i)
+	if err := json.Unmarshal([]byte(cand), &i); err != nil {
+		return fmt.Errorf("failed to unmarshal candidate: %w", err)
+	}
 	return p.pc.AddICECandidate(i)
 }
 
@@ -616,12 +619,9 @@ func (r *SFURoom) RemoveParticipant(u uuid.UUID) {
 		r.mu.RUnlock()
 		
 		if count == 0 {
-			// Note: We need to access sfu to delete room. 
-			// p.sfu.DeleteRoom(r.ID) is called in OnConnectionStateChange, 
-			// but we should probably ensure it happens here too or rely on the caller.
-			// The original code called s.DeleteRoom if count == 0 inside OnConnectionStateChange.
-			// This method is called by OnConnectionStateChange.
-			// Let's leave the deletion logic to the caller or OnConnectionStateChange to avoid circular locking if DeleteRoom locks sfu.
+			// Room is empty.
+			// Ideally we would delete the room here, but the Manager handles cleanup
+			// via OnConnectionStateChange or explicit checks.
 		}
 	}
 }

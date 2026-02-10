@@ -719,7 +719,7 @@ func (h *Hub) handleSFUJoin(client *Client, payload json.RawMessage) {
 		Type:    webrtc.EventTypeCallConfig, 
 		Payload: responseBytes,
 	}
-	client.Send(msg)
+	_ = client.Send(msg)
 }
 
 func (h *Hub) handleSFUOffer(client *Client, payload json.RawMessage) {

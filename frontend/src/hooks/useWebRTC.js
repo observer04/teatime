@@ -39,6 +39,12 @@ export function useWebRTC(userId) {
   const iceServersRef = React.useRef(DEFAULT_ICE_CONFIG.iceServers);
   const callModeRef = React.useRef('p2p');
   
+  // Perfect Negotiation Refs
+  const ignoreOfferRef = React.useRef(false);
+  const isPoliteRef = React.useRef(false);
+  const makingOfferRef = React.useRef(false); 
+  const isSettingRemoteAnswerPendingRef = React.useRef(false);
+  
   // Track if we've ever had other participants (for proper call ending)
   const hasEverHadParticipants = React.useRef(false);
   const maxParticipantCount = React.useRef(0);
@@ -305,7 +311,7 @@ export function useWebRTC(userId) {
           // Send offer to signaling server
           const roomId = callRoomIdRef.current;
           if (roomId) {
-            sendMessage('call.offer', {
+            wsService.send('call.offer', {
                 room_id: roomId,
                 sdp: JSON.stringify(pc.localDescription),
                 target_id: peerId
@@ -330,7 +336,7 @@ export function useWebRTC(userId) {
     }
 
     return pc;
-  }, [localStream, sendMessage]); // Only depend on localStream for re-creation logging, actual values come from refs
+  }, [localStream]); // Only depend on localStream for re-creation logging, actual values come from refs
 
   // Track cleanup timers to prevent race conditions
   const cleanupTimersRef = React.useRef({
@@ -806,7 +812,7 @@ export function useWebRTC(userId) {
 
     const unsubJoined = wsService.on('call.participant_joined', handleParticipantJoined);
     return () => unsubJoined();
-  }, [userId]);
+  }, [userId, createPeerConnection]);
 
   // Handle participant left
   React.useEffect(() => {
@@ -922,10 +928,11 @@ export function useWebRTC(userId) {
         setCallState('idle');
       }, 1000);
       
+      const timers = cleanupTimersRef.current;
       return () => {
-        if (cleanupTimersRef.current.autoEnd) {
-          clearTimeout(cleanupTimersRef.current.autoEnd);
-          cleanupTimersRef.current.autoEnd = null;
+        if (timers.autoEnd) {
+          clearTimeout(timers.autoEnd);
+          timers.autoEnd = null;
         }
       };
     }
@@ -992,7 +999,7 @@ export function useWebRTC(userId) {
         await pc.setLocalDescription(answer);
         
         console.log('Sending answer to:', payload.from_id);
-        sendMessage('call.answer', {
+        wsService.send('call.answer', {
           room_id: payload.room_id,
           target_id: payload.from_id,
           sdp: JSON.stringify(answer)
@@ -1007,7 +1014,7 @@ export function useWebRTC(userId) {
 
     const unsubOffer = wsService.on('call.offer', handleOffer);
     return () => unsubOffer();
-  }, [createPeerConnection, sendMessage]);
+  }, [createPeerConnection]);
 
   // Handle incoming answer
   React.useEffect(() => {
@@ -1421,7 +1428,7 @@ export function useWebRTC(userId) {
         localStreamRef.current.getTracks().forEach(track => {
             try {
                 track.stop();
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
         });
       }
       peerConns.forEach(pc => pc.close());

@@ -67,3 +67,4 @@ Zone.Identifier
 .env.example
 
 claude_review.md
+ci_log.txt

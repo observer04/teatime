@@ -127,7 +127,9 @@ func (h *SFUHandler) HandleGroupJoin(ctx context.Context, sigCtx *SignalingConte
 					Type:    "call.migration", // Frontend needs to listen for this!
 					Payload: payloadBytes,
 				}
-				h.pubsub.Publish(ctx, msg.Topic, msg)
+				if err := h.pubsub.Publish(ctx, msg.Topic, msg); err != nil {
+					h.logger.Error("failed to publish migration event", "error", err, "user_id", participant.UserID)
+				}
 			}
 			
 			// Optional: Close P2P room logic here
