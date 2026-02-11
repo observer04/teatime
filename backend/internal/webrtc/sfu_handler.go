@@ -70,6 +70,7 @@ type SFUConfigPayload struct {
 	Participants []Participant `json:"participants"`
 	Mode         string        `json:"mode"` // "sfu" or "p2p"
 	SDP          string        `json:"sdp,omitempty"`
+	IsInitiator  bool          `json:"is_initiator"`
 }
 
 // SFUTracksPayload contains track information
@@ -173,10 +174,12 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 		return nil, &CallError{Code: "room_not_found", Message: "Room not found after join"}
 	}
 
+	// Determine if this user is the call initiator (no existing call ID means they're first)
+	isInitiator := room.GetCallID() == uuid.Nil
+
 	// Call logging: create call log for initiator, add participant for joiners
 	if h.callRepo != nil {
 		existingCallID := room.GetCallID()
-		isInitiator := existingCallID == uuid.Nil
 
 		if isInitiator {
 			// Zombie call cleanup: end any dangling active calls for this room
@@ -261,6 +264,7 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 		Participants: room.GetParticipantList(),
 		Mode:         "sfu",
 		SDP:          offerSDP,
+		IsInitiator:  isInitiator, // Set based on whether they created the call
 	}, nil
 }
 
@@ -315,6 +319,7 @@ func (h *SFUHandler) joinP2P(ctx context.Context, sigCtx *SignalingContext, room
 		ICEServers:   iceServers,
 		Participants: room.GetParticipants(),
 		Mode:         "p2p",
+		IsInitiator:  isInitiator,
 	}, nil
 }
 

@@ -109,6 +109,13 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
     }
   }, [webrtcError]);
 
+  // Sync modal state with call state
+  React.useEffect(() => {
+    if ((callState === 'idle' || callState === 'ended') && showVideoCall) {
+      setShowVideoCall(false);
+    }
+  }, [callState, showVideoCall]);
+
   React.useEffect(() => {
     loadConversations();
   }, []);
