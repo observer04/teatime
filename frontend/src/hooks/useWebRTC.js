@@ -914,7 +914,7 @@ export function useWebRTC(userId) {
             if (callRoomIdRef.current) {
               setCallState('ended');
               // Give user a moment to see the ended state before full cleanup
-              setTimeout(() => leaveCall(), 2000);
+              cleanupTimersRef.current.endedDelay = setTimeout(() => leaveCall(), 2000);
             }
           }, 500);
         }
