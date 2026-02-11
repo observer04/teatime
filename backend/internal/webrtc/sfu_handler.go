@@ -441,8 +441,6 @@ func (h *SFUHandler) HandleSFULeave(ctx context.Context, sigCtx *SignalingContex
 	return nil
 }
 
-
-
 func (h *SFUHandler) sendAnswerToParticipant(ctx context.Context, userID, roomID uuid.UUID, sdp string) {
 	payload := map[string]interface{}{
 		"room_id": roomID.String(),
