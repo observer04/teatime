@@ -197,6 +197,13 @@ func (h *SFUHandler) joinSFU(ctx context.Context, sigCtx *SignalingContext, room
 			} else {
 				_ = h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
 				room.SetCallID(callLog.ID)
+
+				// Detect if call type is video or audio
+				dbCallType := database.CallTypeVideo
+				if callType == "audio" {
+					dbCallType = database.CallTypeAudio
+				}
+				h.broadcastIncomingCall(ctx, roomID, callLog.ID, sigCtx, dbCallType)
 			}
 		} else {
 			_ = h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
@@ -291,7 +298,9 @@ func (h *SFUHandler) joinP2P(ctx context.Context, sigCtx *SignalingContext, room
 		} else {
 			_ = h.callRepo.AddParticipant(ctx, callLog.ID, sigCtx.UserID)
 			room.SetCallID(callLog.ID)
-			// Note: broadcastIncomingCall is handled by CallHandler
+
+			// Broadcast incoming call to other members
+			h.broadcastIncomingCall(ctx, roomID, callLog.ID, sigCtx, ct)
 		}
 	} else if existingCallID != uuid.Nil && h.callRepo != nil {
 		_ = h.callRepo.AddParticipant(ctx, existingCallID, sigCtx.UserID)
@@ -585,4 +594,51 @@ func (h *SFUHandler) IsUserInSFURoom(roomID, userID uuid.UUID) bool {
 		return false
 	}
 	return room.GetParticipant(userID) != nil
+}
+
+func (h *SFUHandler) broadcastIncomingCall(ctx context.Context, conversationID, callID uuid.UUID, caller *SignalingContext, callType database.CallType) {
+	// Get all conversation members
+	members, err := h.convRepo.GetByID(ctx, conversationID)
+	if err != nil {
+		h.logger.Error("failed to get conversation members for broadcast", "error", err)
+		return
+	}
+
+	isGroup := false
+	if len(members.Members) > 2 {
+		isGroup = true
+	}
+
+	incomingPayload := CallIncomingPayload{
+		CallID:           callID,
+		ConversationID:   conversationID,
+		ConversationName: members.Title, // might be empty for DMs
+		CallerID:         caller.UserID,
+		CallerName:       caller.Username,
+		CallType:         string(callType),
+		IsGroup:          isGroup,
+	}
+
+	payloadBytes, err := json.Marshal(incomingPayload)
+	if err != nil {
+		h.logger.Error("failed to marshal incoming call payload", "error", err)
+		return
+	}
+
+	for _, member := range members.Members {
+		// Don't send to caller
+		if member.UserID == caller.UserID {
+			continue
+		}
+
+		msg := &pubsub.Message{
+			Topic:   pubsub.Topics.User(member.UserID.String()),
+			Type:    EventTypeCallIncoming,
+			Payload: payloadBytes,
+		}
+
+		if err := h.pubsub.Publish(ctx, msg.Topic, msg); err != nil {
+			h.logger.Error("failed to publish incoming call event", "error", err, "target_user", member.UserID)
+		}
+	}
 }
