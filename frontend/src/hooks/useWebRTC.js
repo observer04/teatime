@@ -329,8 +329,10 @@ export function useWebRTC(userId) {
     };
 
     // Process any pending ICE candidates
+    // CRITICAL: Only add if we have a remote description.
+    // If we don't, leave them in pendingCandidates to be flushed by handleOffer or handleAnswer.
     const pending = pendingCandidates.current.get(peerId);
-    if (pending && pending.length > 0) {
+    if (pending && pending.length > 0 && pc.remoteDescription) {
       console.log('Processing', pending.length, 'pending ICE candidates for:', peerId);
       pending.forEach(candidate => {
         pc.addIceCandidate(new RTCIceCandidate(candidate))
@@ -828,6 +830,13 @@ export function useWebRTC(userId) {
       console.log('Participant joined:', payload);
       if (payload.user_id === userId) return; // Ignore self
       
+      // CRITICAL: If a participant joins, clear any pending "end call" timer from a previous leave
+      if (cleanupTimersRef.current.participantLeft) {
+        console.log('Clearing participantLeft timer due to new join');
+        clearTimeout(cleanupTimersRef.current.participantLeft);
+        cleanupTimersRef.current.participantLeft = null;
+      }
+      
       // Mark that we've had participants join (for call ending logic)
       hasEverHadParticipants.current = true;
       maxParticipantCount.current = Math.max(maxParticipantCount.current, 1);
@@ -1024,9 +1033,20 @@ export function useWebRTC(userId) {
           }
           // Polite: Rollback and accept their offer
           console.log("Glare detected: Yielding to incoming offer (Polite)");
-          // Rollback local description if we have one
-          if (pc.localDescription) {
-            await pc.setLocalDescription({ type: 'rollback' });
+          
+          // CRITICAL: If we were trying to make an offer, we must STOP.
+          // We are accepting theirs instead.
+          ignoreOfferRef.current = false;
+          
+          // Rollback local description if we have one (and it's not stable)
+          // Actually, if we are polite, we just need to be ready to accept remote offer.
+          // If we had a local offer set, we need to rollback.
+          if (pc.signalingState !== 'stable') {
+             try {
+               await pc.setLocalDescription({ type: 'rollback' });
+             } catch (err) {
+               console.warn("Rollback failed (maybe not needed):", err);
+             }
           }
       }
       

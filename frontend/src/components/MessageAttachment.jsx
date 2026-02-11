@@ -54,9 +54,42 @@ export function MessageAttachment({ attachmentId, mimeType, filename, sizeBytes 
     }
   }, [attachmentId, loading]);
 
+  const handleDownload = async () => {
+    if (!downloadUrl) return;
+
+    try {
+      setLoading(true);
+      const response = await fetch(downloadUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename || 'download';
+      document.body.appendChild(link);
+      link.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Download failed, falling back to window.open:', err);
+      window.open(downloadUrl, '_blank');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleClick = async () => {
     if (showPreview && downloadUrl) {
-      window.open(downloadUrl, '_blank')
+      if (isImage || isVideo || isAudio) {
+         // specific handling for media if needed, but for now we want download on click for images as per user request
+         // actually, for video/audio we might want to play, but for "downloading an image" request:
+         if (isImage) {
+             await handleDownload();
+         } else {
+             window.open(downloadUrl, '_blank');
+         }
+      } else {
+        await handleDownload();
+      }
     } else {
       await loadUrl()
     }
@@ -111,7 +144,7 @@ export function MessageAttachment({ attachmentId, mimeType, filename, sizeBytes 
           </div>
         )}
         {downloadUrl && (
-          <div className="relative group cursor-pointer" onClick={() => window.open(downloadUrl, '_blank')}>
+          <div className="relative group cursor-pointer" onClick={(e) => { e.stopPropagation(); handleClick(); }}>
             <img
               src={downloadUrl}
               alt={filename || 'Image attachment'}
@@ -124,7 +157,7 @@ export function MessageAttachment({ attachmentId, mimeType, filename, sizeBytes 
                 <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
               </div>
             )}
-            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center" onClick={(e) => { e.stopPropagation(); handleDownload(); }}>
               <Download className="w-6 h-6 text-white" />
             </div>
           </div>
