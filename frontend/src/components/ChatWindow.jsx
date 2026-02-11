@@ -8,7 +8,7 @@ export default function ChatWindow({
   onStartTyping,
   onStopTyping
 }) {
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState(''); 
   const [typingTimeout, setTypingTimeout] = useState(null);
   const [showMembers, setShowMembers] = useState(false);
   const messagesEndRef = useRef(null);
