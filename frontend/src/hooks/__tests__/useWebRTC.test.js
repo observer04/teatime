@@ -38,11 +38,11 @@ class MockRTCPeerConnection {
     this.tracks = new Set();
   }
 
-  addTrack(track, stream) {
+  addTrack(track, _stream) {
     this.tracks.add(track);
   }
 
-  removeTrack(sender) {}
+  removeTrack(_sender) {}
   
   getSenders() { return []; }
 
@@ -66,7 +66,7 @@ class MockRTCPeerConnection {
     this.remoteDescription = desc;
   }
 
-  async addIceCandidate(candidate) {}
+  async addIceCandidate(_candidate) {}
 }
 
 const originalRTCPeerConnection = window.RTCPeerConnection;
@@ -147,7 +147,7 @@ describe('useWebRTC', () => {
   });
 
   it('handleIncomingCall should update incomingCall state', () => {
-    const { result } = renderHook(() => useWebRTC('user-1'));
+    renderHook(() => useWebRTC('user-1'));
 
     const payload = {
       call_id: 'call-123',
