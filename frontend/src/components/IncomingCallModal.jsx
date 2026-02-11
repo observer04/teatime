@@ -5,7 +5,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 /**
  * Modal shown when receiving an incoming call
  */
-export function IncomingCallModal({
+export default function IncomingCallModal({
   isOpen,
   caller,
   callType = 'video',

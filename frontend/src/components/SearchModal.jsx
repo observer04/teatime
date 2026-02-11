@@ -3,7 +3,7 @@ import { X, Search } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import api from '../services/api';
 
-export function SearchModal({ isOpen, onClose, conversationId, onMessageClick }) {
+export default function SearchModal({ isOpen, onClose, conversationId, onMessageClick }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);

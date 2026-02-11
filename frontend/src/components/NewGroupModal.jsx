@@ -3,7 +3,7 @@ import { X, Search, Users, Check } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import api from '../services/api';
 
-export function NewGroupModal({ isOpen, onClose, onGroupCreated }) {
+export default function NewGroupModal({ isOpen, onClose, onGroupCreated }) {
   const [step, setStep] = useState(1); // 1: select members, 2: set name
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);

@@ -3,7 +3,7 @@ import { X, Star } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import api from '../services/api';
 
-export function StarredMessagesModal({ isOpen, onClose, onMessageClick }) {
+export default function StarredMessagesModal({ isOpen, onClose, onMessageClick }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

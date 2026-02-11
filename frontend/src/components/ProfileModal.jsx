@@ -3,7 +3,7 @@ import { X, User, Shield, Trash2, Copy, Check, Eye, EyeOff, MessageSquare } from
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import api from '../services/api';
 
-export function ProfileModal({ isOpen, onClose, user, onLogout, onProfileUpdated }) {
+export default function ProfileModal({ isOpen, onClose, user, onLogout, onProfileUpdated }) {
   const [activeTab, setActiveTab] = useState('profile');
   const [displayName, setDisplayName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');

@@ -3,7 +3,7 @@ import { X, Search, MessageCircle } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import api from '../services/api';
 
-export function NewChatModal({ isOpen, onClose, onChatStarted, currentUserId }) {
+export default function NewChatModal({ isOpen, onClose, onChatStarted, currentUserId }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);

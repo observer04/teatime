@@ -5,14 +5,14 @@ import { GlassChatHeader } from './GlassChatHeader';
 import { GlassChatMessages } from './GlassChatMessages';
 import { GlassMessageInput } from './GlassMessageInput';
 // Lazy load modals to break circular dependencies and improve initial load
-const NewGroupModal = React.lazy(() => import('./NewGroupModal').then(module => ({ default: module.NewGroupModal })));
-const NewChatModal = React.lazy(() => import('./NewChatModal').then(module => ({ default: module.NewChatModal })));
-const StarredMessagesModal = React.lazy(() => import('./StarredMessagesModal').then(module => ({ default: module.StarredMessagesModal })));
-const SearchModal = React.lazy(() => import('./SearchModal').then(module => ({ default: module.SearchModal })));
-const MembersPanel = React.lazy(() => import('./MembersPanel').then(module => ({ default: module.MembersPanel })));
-const VideoCallModal = React.lazy(() => import('./VideoCallModal')); // Default export
-const IncomingCallModal = React.lazy(() => import('./IncomingCallModal').then(module => ({ default: module.IncomingCallModal })));
-const ProfileModal = React.lazy(() => import('./ProfileModal').then(module => ({ default: module.ProfileModal })));
+const NewGroupModal = React.lazy(() => import('./NewGroupModal'));
+const NewChatModal = React.lazy(() => import('./NewChatModal'));
+const StarredMessagesModal = React.lazy(() => import('./StarredMessagesModal'));
+const SearchModal = React.lazy(() => import('./SearchModal'));
+const MembersPanel = React.lazy(() => import('./MembersPanel'));
+const VideoCallModal = React.lazy(() => import('./VideoCallModal'));
+const IncomingCallModal = React.lazy(() => import('./IncomingCallModal'));
+const ProfileModal = React.lazy(() => import('./ProfileModal'));
 import { CallsTab } from './CallsTab';
 import api from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -439,116 +439,133 @@ export default function GlassmorphismChatLayout({ user, token, onLogout }) {
       </main>
 
       {/* Modals */}
+      {/* Modals - Conditionally rendered to prevent early loading */}
       <React.Suspense fallback={null}>
-        <NewGroupModal
-          isOpen={showNewGroupModal}
-          onClose={() => setShowNewGroupModal(false)}
-          onGroupCreated={handleGroupCreated}
-        />
+        {showNewGroupModal && (
+          <NewGroupModal
+            isOpen={showNewGroupModal}
+            onClose={() => setShowNewGroupModal(false)}
+            onGroupCreated={handleGroupCreated}
+          />
+        )}
 
-        <NewChatModal
-          isOpen={showNewChatModal}
-          onClose={() => setShowNewChatModal(false)}
-          onChatStarted={handleChatStarted}
-          currentUserId={user.id}
-        />
+        {showNewChatModal && (
+          <NewChatModal
+            isOpen={showNewChatModal}
+            onClose={() => setShowNewChatModal(false)}
+            onChatStarted={handleChatStarted}
+            currentUserId={user.id}
+          />
+        )}
 
-        <StarredMessagesModal
-          isOpen={showStarredModal}
-          onClose={() => setShowStarredModal(false)}
-          onMessageClick={handleStarredMessageClick}
-        />
+        {showStarredModal && (
+          <StarredMessagesModal
+            isOpen={showStarredModal}
+            onClose={() => setShowStarredModal(false)}
+            onMessageClick={handleStarredMessageClick}
+          />
+        )}
 
-        <SearchModal
-          isOpen={showSearchModal}
-          onClose={() => setShowSearchModal(false)}
-          conversationId={currentConversation?.id}
-          onMessageClick={handleSearchMessageClick}
-        />
+        {showSearchModal && (
+          <SearchModal
+            isOpen={showSearchModal}
+            onClose={() => setShowSearchModal(false)}
+            conversationId={currentConversation?.id}
+            onMessageClick={handleSearchMessageClick}
+          />
+        )}
 
-        <MembersPanel
-          isOpen={showMembersPanel}
-          onClose={() => setShowMembersPanel(false)}
-          conversation={currentConversation}
-          currentUserId={user.id}
-          onMemberAdded={(_member) => {
-            // Update member count in current conversation
-            if (currentConversation) {
-              setCurrentConversation(prev => ({
-                ...prev,
-                member_count: (prev.member_count || 0) + 1
-              }));
-            }
-          }}
-          onMemberRemoved={(member) => {
-            if (member.left) {
-              // User left the group - navigate away
-              setCurrentConversation(null);
-              setShowMobileChat(false);
-              loadConversations();
-            } else {
-              // Someone was removed - update count
+        {showMembersPanel && (
+          <MembersPanel
+            isOpen={showMembersPanel}
+            onClose={() => setShowMembersPanel(false)}
+            conversation={currentConversation}
+            currentUserId={user.id}
+            onMemberAdded={(_member) => {
+              // Update member count in current conversation
               if (currentConversation) {
                 setCurrentConversation(prev => ({
                   ...prev,
-                  member_count: Math.max((prev.member_count || 1) - 1, 1)
+                  member_count: (prev.member_count || 0) + 1
                 }));
               }
-            }
-          }}
-        />
+            }}
+            onMemberRemoved={(member) => {
+              if (member.left) {
+                // User left the group - navigate away
+                setCurrentConversation(null);
+                setShowMobileChat(false);
+                loadConversations();
+              } else {
+                // Someone was removed - update count
+                if (currentConversation) {
+                  setCurrentConversation(prev => ({
+                    ...prev,
+                    member_count: Math.max((prev.member_count || 1) - 1, 1)
+                  }));
+                }
+              }
+            }}
+          />
+        )}
 
-        {/* Video Call Modal */}
-        <VideoCallModal
-          isOpen={showVideoCall || isInCall}
-          onClose={handleEndVideoCall}
-          conversationName={currentChat?.name || 'Video Call'}
-          localStream={localStream}
-          remoteStreams={remoteStreams}
-          isMuted={isMuted}
-          isVideoOff={isVideoOff}
-          onToggleMute={toggleMute}
-          onToggleVideo={toggleVideo}
-          onEndCall={handleEndVideoCall}
-          participants={participants}
-          callState={callState}
-        />
+        {/* Video Call Modal - keep mounted if in call for state preservation, but lazy load */}
+        {(showVideoCall || isInCall) && (
+          <VideoCallModal
+            isOpen={showVideoCall || isInCall}
+            onClose={handleEndVideoCall}
+            conversationName={currentChat?.name || 'Video Call'}
+            localStream={localStream}
+            remoteStreams={remoteStreams}
+            isMuted={isMuted}
+            isVideoOff={isVideoOff}
+            onToggleMute={toggleMute}
+            onToggleVideo={toggleVideo}
+            onEndCall={handleEndVideoCall}
+            participants={participants}
+            callState={callState}
+          />
+        )}
 
         {/* Incoming Call Modal */}
-        <IncomingCallModal
-          isOpen={!!incomingCall}
-          caller={incomingCall?.caller}
-          callType={incomingCall?.callType}
-          isGroup={incomingCall?.isGroup}
-          conversationName={incomingCall?.conversationName}
-          onAccept={async (withVideo) => {
-            try {
-              await acceptCall(withVideo);
-              // Only show video call UI if accept succeeded
-              setShowVideoCall(true);
-            } catch (err) {
-              console.error('Failed to accept call:', err);
-              // Error is already set in useWebRTC hook, just log here
-            }
-          }}
-          onDecline={declineCall}
-        />
+        {!!incomingCall && (
+          <IncomingCallModal
+            isOpen={!!incomingCall}
+            caller={incomingCall?.caller}
+            callType={incomingCall?.callType}
+            isGroup={incomingCall?.isGroup}
+            conversationName={incomingCall?.conversationName}
+            onAccept={async (withVideo) => {
+              try {
+                await acceptCall(withVideo);
+                // Only show video call UI if accept succeeded
+                setShowVideoCall(true);
+              } catch (err) {
+                console.error('Failed to accept call:', err);
+                // Error is already set in useWebRTC hook, just log here
+              }
+            }}
+            onDecline={declineCall}
+          />
+        )}
 
         {/* Profile Modal */}
-        <ProfileModal
-          isOpen={showProfileModal}
-          onClose={() => setShowProfileModal(false)}
-          user={currentUser}
-          onLogout={onLogout}
-          onProfileUpdated={async () => {
-            try {
-              const updated = await api.getMe();
-              setCurrentUser(updated);
-            } catch (err) {
-              console.error('Failed to refresh user:', err);
-            }
-          }}
-        />
+        {showProfileModal && (
+          <ProfileModal
+            isOpen={showProfileModal}
+            onClose={() => setShowProfileModal(false)}
+            user={currentUser}
+            onLogout={onLogout}
+            onProfileUpdated={async () => {
+              try {
+                const updated = await api.getMe();
+                setCurrentUser(updated);
+              } catch (err) {
+                console.error('Failed to refresh user:', err);
+              }
+            }}
+          />
+        )}
       </React.Suspense>
     </div>
   )

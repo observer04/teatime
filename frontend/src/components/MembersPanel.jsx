@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import { X, Search, UserPlus, Crown, Shield, Trash2, Loader2 } from "lucide-react"
 import api from "../services/api"
 
-export function MembersPanel({ 
+export default function MembersPanel({ 
   isOpen, 
   onClose, 
   conversation, 
@@ -22,21 +22,6 @@ export function MembersPanel({
   // Get current user's role
   const currentUserMember = members.find(m => m.id === currentUserId)
   const isAdmin = currentUserMember?.role === 'admin'
-
-  useEffect(() => {
-    if (isOpen && conversation?.id) {
-      loadMembers()
-    }
-  }, [isOpen, conversation?.id, loadMembers])
-
-  useEffect(() => {
-    if (searchQuery.length >= 2) {
-      const timer = setTimeout(() => searchUsers(), 300)
-      return () => clearTimeout(timer)
-    } else {
-      setSearchResults([])
-    }
-  }, [searchQuery, searchUsers])
 
   const loadMembers = useCallback(async () => {
     setLoading(true)
@@ -71,6 +56,21 @@ export function MembersPanel({
       setSearching(false)
     }
   }, [searchQuery, members])
+
+  useEffect(() => {
+    if (isOpen && conversation?.id) {
+      loadMembers()
+    }
+  }, [isOpen, conversation?.id, loadMembers])
+
+  useEffect(() => {
+    if (searchQuery.length >= 2) {
+      const timer = setTimeout(() => searchUsers(), 300)
+      return () => clearTimeout(timer)
+    } else {
+      setSearchResults([])
+    }
+  }, [searchQuery, searchUsers])
 
   const handleAddMember = async (user) => {
     setActionLoading(user.id)
